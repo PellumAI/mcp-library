@@ -1,0 +1,10 @@
+# Key material, the executor target and the workflows that hold the signing
+# secret are meant for a narrower group than server recipes. The organisation
+# has no teams yet, so every path names the repository owner today; swap in
+# @PellumAI/mcp-library-maintainers for `*` and @PellumAI/mcp-library-owners
+# for the other three once those teams exist, then turn on "require review
+# from code owners" in main's branch protection.
+*                     @Galvill
+/keys/                @Galvill
+/EXECUTOR_TARGET.yaml @Galvill
+/.github/workflows/   @Galvill

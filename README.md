@@ -26,11 +26,19 @@ fingerprint is recorded in `keys/README.md`.
 
 ## Submitting a server
 
-Open one pull request adding one directory under `servers/`. CI builds it twice
-and refuses it unless both builds produce the same digest, validates its
-manifest against the schema the pinned MCPGW build publishes, and refuses it if
-its runtime line is outside the executor window in `EXECUTOR_TARGET.yaml`. See
-`docs/PACKAGE-FORMAT.md` for what a package is.
+Open one pull request adding one directory under `servers/`, using the
+`server` pull-request template, and add its row to the evaluated-candidates
+table in `docs/VETTING.md`. CI builds it twice and refuses it unless both
+builds produce the same digest, validates its manifest against the schema the
+pinned MCPGW build publishes, refuses it if its runtime line is outside the
+executor window in `EXECUTOR_TARGET.yaml`, and refuses a new server with no
+vetting row. A maintainer then reviews the build recipe, the vendored
+dependency set and the declared egress before anything is signed; the merge is
+what signs it.
+
+- `docs/PACKAGE-FORMAT.md`: what a package is.
+- `docs/VETTING.md`: the twelve checks a server must pass.
+- `docs/CURATION.md`: the runtime-window rule and the review a maintainer does.
 
 ## Repository layout
 
