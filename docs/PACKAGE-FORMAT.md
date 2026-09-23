@@ -52,6 +52,10 @@ servers/<name>/
   patches/            upstream patches; rare and reviewed
 ```
 
+A native build that compiles front-end assets before it compiles Go names the
+extra runtime line it needs as `build.toolchains: [node@22]`; that line is on
+`PATH` for the steps and never reaches the package.
+
 `manifest.json` ships inside the tar and is what the gateway validates.
 `package.yaml` is build instructions the gateway never sees. The two overlap in
 four fields, `name`, `version`, `runtime` and `arch`, and `mcplib validate`

@@ -24,6 +24,19 @@ The default base is `https://pellumai.github.io/mcp-library`. Both the index
 and every blob are signed; the public key is `keys/library-v1.pub`, and its
 fingerprint is recorded in `keys/README.md`.
 
+## The catalogue
+
+| Package | Upstream | Runtime | Credential |
+|---|---|---|---|
+| `buildkite` | buildkite/buildkite-mcp-server 1.22.0 | native | `BUILDKITE_API_TOKEN` |
+| `context7` | @upstash/context7-mcp 4.1.1 | node@22 | optional `CONTEXT7_API_KEY` |
+| `github` | github/github-mcp-server 1.12.2 | native | `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| `grafana` | grafana/mcp-grafana 1.5.1 | native | `GRAFANA_SERVICE_ACCOUNT_TOKEN` |
+| `terraform` | hashicorp/terraform-mcp-server 1.3.0 | native | optional `TFE_TOKEN` |
+
+All five speak stdio and are `linux/amd64`. `docs/VETTING.md` records the
+evidence for each, and every candidate that was evaluated and not packaged.
+
 ## Submitting a server
 
 Open one pull request adding one directory under `servers/`, using the

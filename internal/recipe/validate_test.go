@@ -78,6 +78,7 @@ func TestValidate_Refusals(t *testing.T) {
 		{"version", func(_ *recipe.Recipe, m *manifest.Doc) { m.Version = "9" }, `version "1.5.1" does not match manifest version "9"`},
 		{"runtime mismatch", func(_ *recipe.Recipe, m *manifest.Doc) { m.Runtime = "node@22" }, `runtime "native" does not match manifest runtime "node@22"`},
 		{"runtime window", func(r *recipe.Recipe, m *manifest.Doc) { r.Runtime, m.Runtime = "node@18", "node@18" }, `runtime "node@18" is outside the executor window`},
+		{"toolchain window", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Toolchains = []string{"node@18"} }, `build.toolchains: runtime_unavailable: runtime "node@18"`},
 		{"arch empty", func(r *recipe.Recipe, _ *manifest.Doc) { r.Arch = nil }, "is not a subset of the manifest's"},
 		{"arch superset", func(r *recipe.Recipe, m *manifest.Doc) { m.Arch = []string{"arm64"} }, "is not a subset of the manifest's"},
 		{"source kind", func(r *recipe.Recipe, _ *manifest.Doc) { r.Source.Kind = "latest" }, `source.kind "latest" is not git, npm, pypi or archive`},

@@ -162,8 +162,9 @@ func Run(ctx context.Context, o Options) (Meta, error) {
 			Work:    scratch,
 			Argv:    argv,
 			Arch:    o.Arch,
-			Runtime: r.Runtime,
-			Network: recipe.StepNeedsNetwork(argv),
+			Runtime:    r.Runtime,
+			Toolchains: r.Build.Toolchains,
+			Network:    recipe.StepNeedsNetwork(argv),
 		}
 		logf("step %d: %s (network %v)", i, strings.Join(argv, " "), spec.Network)
 		if err := o.Runner.Run(ctx, spec); err != nil {

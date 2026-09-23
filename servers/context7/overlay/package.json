@@ -1,0 +1,11 @@
+{
+  "name": "mcp-library-context7",
+  "version": "4.1.1",
+  "private": true,
+  "description": "Vendors @upstash/context7-mcp at one exact version. The lockfile beside this file pins every dependency by integrity.",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@upstash/context7-mcp": "4.1.1"
+  }
+}

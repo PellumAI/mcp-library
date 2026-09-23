@@ -79,6 +79,11 @@ type Build struct {
 	// of the file that makes the dependency set exact. Required for node and
 	// python, and for a native Go build.
 	Lockfile string `yaml:"lockfile"`
+	// Toolchains are extra runtime lines put on PATH for the steps only, for
+	// a native build that compiles front-end assets with node before it
+	// compiles Go. Each must be inside the executor window, so the build
+	// image carries it; none of them reaches the package.
+	Toolchains []string `yaml:"toolchains"`
 }
 
 // StageRule copies From in the built tree to To in the package tar.

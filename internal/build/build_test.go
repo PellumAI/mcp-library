@@ -275,6 +275,10 @@ func TestDockerArgs(t *testing.T) {
 			t.Errorf("argv lacks %q:\n%s", want, joined)
 		}
 	}
+	native := strings.Join(DockerArgs(StepSpec{Image: image, Work: "/w", Argv: []string{"npm", "ci", "--prefix", "ui"}, Arch: "amd64", Runtime: "native", Toolchains: []string{"node@22"}, Network: true}, 1, 1), " ")
+	if !strings.Contains(native, "--env PATH=/opt/mcpgw/runtimes/node@22/bin:/usr/local/go/bin:") {
+		t.Errorf("a native build's toolchain is not on PATH:\n%s", native)
+	}
 	net := DockerArgs(StepSpec{Image: image, Work: "/w", Argv: []string{"npm", "ci"}, Arch: "amd64", Runtime: "node@22", Network: true}, 1, 1)
 	if slices.Contains(net, "none") {
 		t.Fatal("npm ci runs without the network")
