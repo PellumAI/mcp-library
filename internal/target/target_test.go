@@ -99,6 +99,16 @@ func TestParse_RefusesAnUnpinnedBuild(t *testing.T) {
 	}
 }
 
+func TestParse_RefusesABuildImageByTag(t *testing.T) {
+	if _, err := target.Parse([]byte(doc("build_image: ghcr.io/pellumai/mcp-library/build:20260923\n"))); err == nil {
+		t.Fatal("a build image pinned by tag is accepted")
+	}
+	pinned := "build_image: ghcr.io/pellumai/mcp-library/build@sha256:" + strings.Repeat("a", 64) + "\n"
+	if _, err := target.Parse([]byte(doc(pinned))); err != nil {
+		t.Fatalf("a digest-pinned build image is refused: %v", err)
+	}
+}
+
 func TestParse_RefusesAnUnknownField(t *testing.T) {
 	if _, err := target.Parse([]byte(doc("latest: true\n"))); err == nil {
 		t.Fatal("an unknown field is accepted")

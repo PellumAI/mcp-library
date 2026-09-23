@@ -9,6 +9,8 @@ on:
 # workflow here declares exactly what it needs. CI needs to read the tree.
 permissions:
   contents: read
+  # To pull the pinned build image from this repository's own GHCR package.
+  packages: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -69,6 +71,15 @@ jobs:
 
       - name: Build mcplib
         run: make build
+
+      # The build image is this repository's own GHCR package; the token can
+      # read it whether or not the package is public yet.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # The property the repository exists to have, proven per pull request:
       # every touched package builds twice to the same digest.

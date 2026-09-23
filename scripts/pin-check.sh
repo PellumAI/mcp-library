@@ -92,6 +92,19 @@ while IFS=: read -r file line rest; do
   fail "$file:$line: resolves @latest at run time — pin the version"
 done < <(grep -nHE '[A-Za-z0-9_./-]@latest' Makefile $(git ls-files scripts .github) | grep -v '^scripts/pin-check.sh:')
 
+# ---------------------------------------------------------------- build image
+# Every Dockerfile FROM is covered above. This covers the build image recipes
+# run inside, which is not in a Dockerfile: it lives in EXECUTOR_TARGET.yaml
+# and must be pinned by digest for the same reason, because it fixes the
+# toolchain a package digest depends on.
+ok
+build_image="$(sed -nE 's/^[[:space:]]*build_image:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' EXECUTOR_TARGET.yaml)"
+case "$build_image" in
+  *@sha256:*) ;;
+  "") fail "EXECUTOR_TARGET.yaml has no build_image" ;;
+  *) fail "EXECUTOR_TARGET.yaml build_image '$build_image' is not pinned by digest" ;;
+esac
+
 # ---------------------------------------------------------------- recipes
 # A recipe may not resolve a version at build time. mcplib validate enforces
 # the same refusals in Go; they are enforced again here so a reviewer sees the

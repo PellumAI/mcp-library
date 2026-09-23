@@ -29,3 +29,8 @@ runtimes:
   - python@3.12
   - python@3.11
   - native
+# The image every recipe builds inside. Pinned by digest because the digest of
+# a package is a function of the toolchain that produced it; see
+# docs/REPRODUCIBILITY.md. build-image.yml pushes a new one and prints its
+# digest; moving this line is a library release, see docs/CURATION.md.
+build_image: "ghcr.io/pellumai/mcp-library/build@sha256:66c0ada204b9516e984d5a69d7aef7cb7dbd6fda6104f6453d5e3cc9e726ff8e"
