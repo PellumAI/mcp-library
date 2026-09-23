@@ -56,6 +56,52 @@ jobs:
       - name: The tar writer is byte-stable
         run: go test ./internal/pack/... -run TestWrite -count=5
 
+  # Three checks CI can make that a reviewer would otherwise make by eye.
+  curation:
+    name: curation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: A new server must be recorded in the vetting table
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          new="$(git diff --name-only --diff-filter=A "origin/${BASE_REF}...HEAD" \
+            | sed -nE 's#^servers/([^/]+)/package\.yaml$#\1#p')"
+          for name in $new; do
+            grep -qE "^\| \`?$name\`? " docs/VETTING.md || {
+              echo "servers/$name is new but has no row in docs/VETTING.md" >&2; exit 1; }
+          done
+
+      - name: Every recipe carries vetting evidence
+        run: |
+          set -euo pipefail
+          make build
+          ./bin/mcplib validate ./servers/...
+
+      # The one that prevents the worst review failure available here: a bump
+      # of the window buried inside a server change, where the rebuild of
+      # every other package the bump requires never happens.
+      - name: The executor target and a server change never travel together
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          files="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          if grep -qE '^(EXECUTOR_TARGET\.yaml|contract/)' <<<"$files" && grep -q '^servers/' <<<"$files"; then
+            echo "EXECUTOR_TARGET.yaml and contract/ move in their own pull request; see docs/CURATION.md" >&2
+            exit 1
+          fi
+
   packages:
     name: packages
     runs-on: ubuntu-latest
