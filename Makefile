@@ -68,9 +68,10 @@ index: build
 site: build
 	@$(MCPLIB) site --index dist/index.json --out site
 
-## fixture: regenerate the miniature library MCPGW's contract test consumes
+## fixture: regenerate the miniature library MCPGW's contract test consumes, and the rotation rehearsal
 fixture: build
 	@$(MCPLIB) fixture --out dist/fixture
+	@$(MCPLIB) fixture --rotation --out dist/rotation
 
 ## verify: verify dist/index.json against the committed public keys
 verify: build

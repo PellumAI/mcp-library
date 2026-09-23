@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "fixture-echo",
+  "version": "1.0.0",
+  "title": "Fixture echo",
+  "description": "A native stdio server with one echo tool. Contract fixture only.",
+  "license": "Apache-2.0",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/fixture-echo"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [
+    { "name": "greeting", "type": "string", "required": false, "env": "FIXTURE_GREETING", "description": "Unused; exercises a param." }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [],
+  "resources": { "cpu_max": "50000 100000", "memory_max": "64Mi", "pids_max": 16 },
+  "env": {},
+  "health": { "initialize_timeout": "10s" }
+}
