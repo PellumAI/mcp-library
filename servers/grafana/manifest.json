@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "name": "grafana",
+  "version": "1.5.1",
+  "title": "Grafana",
+  "description": "Query dashboards, panels, datasources, alerts and incidents on a Grafana instance. Reaches Grafana with a service account token you supply as a named secret.",
+  "homepage": "https://github.com/grafana/mcp-grafana",
+  "license": "Apache-2.0",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/mcp-grafana"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": false,
+  "params": [
+    {
+      "name": "grafana_url",
+      "type": "string",
+      "required": true,
+      "secret": false,
+      "env": "GRAFANA_URL",
+      "description": "Base URL of the Grafana instance, including the scheme."
+    },
+    {
+      "name": "service_account_token",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "env": "GRAFANA_SERVICE_ACCOUNT_TOKEN",
+      "description": "Grafana service account token with the scopes you want exposed."
+    },
+    {
+      "name": "org_id",
+      "type": "string",
+      "required": false,
+      "secret": false,
+      "env": "GRAFANA_ORG_ID",
+      "description": "Numeric Grafana organization id, when the token spans more than one organization."
+    }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [
+    { "host": "${grafana_url.host}", "reason": "the Grafana instance this server queries" }
+  ],
+  "resources": { "cpu_max": "100000 100000", "memory_max": "256Mi", "pids_max": 128 },
+  "env": {},
+  "health": { "initialize_timeout": "20s" }
+}

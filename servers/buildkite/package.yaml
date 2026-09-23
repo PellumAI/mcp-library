@@ -1,0 +1,36 @@
+schema_version: 1
+name: buildkite
+version: 1.22.0
+runtime: native
+arch: [amd64]
+categories: [ci]
+source:
+  kind: git
+  repo: https://github.com/buildkite/buildkite-mcp-server
+  # v1.22.0, released 2026-09-04.
+  commit: "565af319ef25f4f53336cdba4469db784aaf67a3"
+build:
+  lockfile: go.sum
+  steps:
+    - ["go", "mod", "download"]
+    - ["go", "build", "-trimpath", "-ldflags", "-s -w -buildid=", "-o", "out/buildkite-mcp-server", "./cmd/buildkite-mcp-server"]
+  stage:
+    - { from: out/buildkite-mcp-server, to: bin/buildkite-mcp-server }
+    - { from: LICENSE, to: LICENSE }
+vetting:
+  vetted_on: "2026-09-23"
+  vetted_by: "Galvill, with Claude"
+  sources:
+    - https://github.com/buildkite/buildkite-mcp-server/tree/v1.22.0
+    - https://github.com/buildkite/buildkite-mcp-server/blob/v1.22.0/cmd/buildkite-mcp-server/main.go
+    - https://buildkite.com/docs/apis/mcp-server
+  license: MIT
+  egress_rationale: "Dials only the Buildkite REST API."
+  notes: >-
+    Carried forward from 2026-09-18 because it is still the thing that could
+    break this entry: it passes the credential check only because a
+    process-wide BUILDKITE_API_TOKEN is supported alongside a per-request
+    mode. If a future release drops the process-wide token, this entry has to
+    move to upstream_auth over transport http, or go. Re-checked at v1.22.0:
+    main.go still reads BUILDKITE_API_TOKEN. Job logs are cached under HOME,
+    which the sandbox points at the per-instance state directory.

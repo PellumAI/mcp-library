@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "name": "terraform",
+  "version": "1.3.0",
+  "title": "Terraform",
+  "description": "Search the Terraform registry for providers, modules and policies, and read and manage HCP Terraform workspaces when given a token.",
+  "homepage": "https://github.com/hashicorp/terraform-mcp-server",
+  "license": "MPL-2.0",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/terraform-mcp-server", "stdio"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [
+    {
+      "name": "tfe_token",
+      "type": "string",
+      "required": false,
+      "secret": true,
+      "env": "TFE_TOKEN",
+      "description": "HCP Terraform or Terraform Enterprise API token. Without it only the registry tools are available."
+    },
+    {
+      "name": "tfe_address",
+      "type": "string",
+      "required": false,
+      "secret": false,
+      "env": "TFE_ADDRESS",
+      "description": "Terraform Enterprise base URL. Leave unset for HCP Terraform; a self-hosted address also needs an egress override."
+    }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [
+    { "host": "registry.terraform.io", "reason": "provider, module and policy documentation from the public registry" },
+    { "host": "app.terraform.io", "reason": "HCP Terraform workspaces, runs and variables when a token is set" }
+  ],
+  "resources": { "cpu_max": "100000 100000", "memory_max": "256Mi", "pids_max": 128 },
+  "env": {},
+  "health": { "initialize_timeout": "20s" }
+}
