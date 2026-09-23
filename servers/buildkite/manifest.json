@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "buildkite",
+  "version": "1.22.0",
+  "title": "Buildkite",
+  "description": "Inspect Buildkite pipelines, builds, jobs, logs, annotations and test results, and trigger builds, with an API token you supply as a named secret.",
+  "homepage": "https://github.com/buildkite/buildkite-mcp-server",
+  "license": "MIT",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/buildkite-mcp-server", "stdio"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [
+    {
+      "name": "api_token",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "env": "BUILDKITE_API_TOKEN",
+      "description": "Buildkite API access token with the scopes you want exposed."
+    }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [
+    { "host": "api.buildkite.com", "reason": "the Buildkite REST API every tool calls" }
+  ],
+  "resources": { "cpu_max": "100000 100000", "memory_max": "256Mi", "pids_max": 128 },
+  "env": {},
+  "health": { "initialize_timeout": "20s" }
+}
