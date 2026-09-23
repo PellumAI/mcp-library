@@ -49,6 +49,8 @@ var ErrRuntime = errors.New("runtime_unavailable")
 var (
 	hex64RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	hex40RE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// buildImageRE is an image reference pinned by digest, and nothing else.
+	buildImageRE = regexp.MustCompile(`^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$`)
 )
 
 // Target is EXECUTOR_TARGET.yaml.
@@ -105,6 +107,8 @@ func Parse(b []byte) (Target, error) {
 		return Target{}, fmt.Errorf("target: %s: schema_asset and window_asset are required", FileName)
 	case len(t.Runtimes) == 0:
 		return Target{}, fmt.Errorf("target: %s: runtimes is empty", FileName)
+	case t.BuildImage != "" && !buildImageRE.MatchString(t.BuildImage):
+		return Target{}, fmt.Errorf("target: %s: build_image %q is not pinned by digest", FileName, t.BuildImage)
 	}
 	return t, nil
 }

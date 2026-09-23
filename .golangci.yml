@@ -38,6 +38,11 @@ linters:
         - G301
         - G302
         - G306
+        # G122, G703: the walks rewrite files inside a scratch tree this
+        # process created and nothing else writes to; pack.Refuse is what
+        # guards what a tree may contain.
+        - G122
+        - G703
   exclusions:
     rules:
       - path: _test\.go
