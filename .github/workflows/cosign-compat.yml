@@ -1,0 +1,66 @@
+name: cosign-compat
+
+# The verifier's central assumption, re-proved on every push: what the real
+# cosign CLI emits for sign-blob under an ECDSA P-256 key is base64 of an
+# ASN.1 DER signature over the payload's SHA-256, which internal/sign/verify.go
+# -- and its twin in MCPGW -- checks with crypto/ecdsa alone. If a future
+# cosign changes that encoding, this goes red before anything is published.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.5
+
+      # A pull request from a fork has no access to the library key. It
+      # proves the encoding with a key pair generated here instead, which is
+      # the whole point; the secret only proves the secret still works, which
+      # the publish job proves anyway.
+      - name: Sign with the library key and verify with the Go verifier
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          COSIGN_LIBRARY_KEY: ${{ secrets.COSIGN_LIBRARY_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_LIBRARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf 'compat fixture %s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/compat.bin"
+          cosign sign-blob --yes --tlog-upload=false --key env://COSIGN_LIBRARY_KEY \
+            --output-signature "$RUNNER_TEMP/compat.sig" "$RUNNER_TEMP/compat.bin"
+          go run ./cmd/mcplib verify-blob \
+            --key keys/library-v1.pub \
+            --signature "$RUNNER_TEMP/compat.sig" \
+            "$RUNNER_TEMP/compat.bin"
+
+      - name: Sign with a throwaway key and verify with the Go verifier
+        env:
+          COSIGN_PASSWORD: ""
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          cosign generate-key-pair --output-key-prefix throwaway
+          printf 'compat fixture %s\n' "$GITHUB_SHA" > compat.bin
+          cosign sign-blob --yes --tlog-upload=false --key throwaway.key \
+            --output-signature throwaway.sig compat.bin
+          cd "$GITHUB_WORKSPACE"
+          go run ./cmd/mcplib verify-blob \
+            --key "$RUNNER_TEMP/throwaway.pub" \
+            --signature "$RUNNER_TEMP/throwaway.sig" \
+            "$RUNNER_TEMP/compat.bin"
