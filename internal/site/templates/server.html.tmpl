@@ -1,0 +1,79 @@
+{{define "server.html.tmpl"}}{{template "head" .}}{{with .Package}}
+<h1>{{.Title}} <span class="name">{{.Name}}</span></h1>
+<p class="lede">{{.Description}}</p>
+<dl class="facts">
+  {{if .Homepage}}<dt>Homepage</dt><dd><a href="{{.Homepage}}" rel="noopener noreferrer">{{.Homepage}}</a></dd>{{end}}
+  {{if .License}}<dt>License</dt><dd>{{.License}}</dd>{{end}}
+  <dt>Runtime</dt><dd><code>{{.Newest.M.Runtime}}</code>, transport <code>{{.Newest.M.Transport}}</code></dd>
+  {{if .Categories}}<dt>Categories</dt><dd>{{join .Categories ", "}}</dd>{{end}}
+</dl>
+
+<h2>Versions</h2>
+<table>
+  <thead><tr><th>Version</th><th>Published</th><th>Runtime</th><th>Blobs</th></tr></thead>
+  <tbody>
+  {{range .Versions}}
+    <tr>
+      <td>{{.Version.Version}}</td>
+      <td>{{.PublishedAt}}</td>
+      <td><code>{{.M.Runtime}}</code></td>
+      <td>
+      {{range .Blobs}}
+        <div class="blob"><span class="plat">{{.OS}}/{{.Arch}}</span> <code class="digest">{{.SHA256}}</code> <span class="size">{{mib .Size}}</span>
+        <pre>curl -fsSLO {{$.Base}}/blobs/sha256/{{.SHA256}}</pre></div>
+      {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+{{with .Newest}}
+<h2>Parameters</h2>
+{{if .M.Params}}
+<table>
+  <thead><tr><th>Name</th><th>Type</th><th>Environment</th><th>Required</th><th>Secret</th><th>Description</th></tr></thead>
+  <tbody>
+  {{range .M.Params}}
+    <tr><td><code>{{.Name}}</code></td><td>{{.Type}}</td><td>{{if .Env}}<code>{{.Env}}</code>{{else}}presented per request{{end}}</td><td>{{if .Required}}yes{{else}}no{{end}}</td><td>{{if .Secret}}yes{{else}}no{{end}}</td><td>{{.Description}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p>None.</p>{{end}}
+
+<h2>Credentials</h2>
+{{if .M.UpstreamAuth}}<p>Per-request credential: the gateway presents param <code>{{.M.UpstreamAuth.Param}}</code> on every proxied call as <code>{{.M.UpstreamAuth.Method}}</code>. The process never sees it.</p>
+{{else if .M.GatewayAuth}}<p>The server verifies a per-instance token the gateway mints.</p>
+{{else}}<p>The server verifies no caller token. The executor's sandbox and listener are the controls on who may call it.</p>{{end}}
+
+<h2>Egress</h2>
+{{if .M.Egress}}
+<table>
+  <thead><tr><th>Destination</th><th>Port</th><th>Reason</th></tr></thead>
+  <tbody>
+  {{range .M.Egress}}<tr><td><code>{{.Host}}{{.CIDR}}</code></td><td>{{if .Port}}{{.Port}}{{else}}default web ports{{end}}</td><td>{{.Reason}}</td></tr>{{end}}
+  </tbody>
+</table>
+<p class="note">A host of the form <code>${param.host}</code> is the host of a URL the operator supplies, resolved by the gateway at claim time. The library never knows it.</p>
+{{else}}<p>None: the server dials nothing.</p>{{end}}
+
+<h2>Resource defaults</h2>
+<p>memory.max <code>{{.M.Resources.MemoryMax}}</code>, pids.max <code>{{.M.Resources.PidsMax}}</code>{{if .M.Resources.CPUMax}}, cpu.max <code>{{.M.Resources.CPUMax}}</code>{{end}}.</p>
+
+<h2>Verify a download</h2>
+<p>Against the library key, which is what a gateway checks:</p>
+{{range .Blobs}}
+<pre>curl -fsSLO {{$.Base}}/blobs/sha256/{{.SHA256}}
+curl -fsSLO {{$.Base}}/blobs/sha256/{{.SHA256}}.sig
+curl -fsSLO {{$.Base}}/keys/library-v1.pub
+echo "{{.SHA256}}  {{.SHA256}}" | sha256sum -c -
+cosign verify-blob --insecure-ignore-tlog --key library-v1.pub --signature {{.SHA256}}.sig {{.SHA256}}</pre>
+<p>Against the keyless attestation, which says which workflow built it:</p>
+<pre>curl -fsSLO {{$.Base}}/blobs/sha256/{{.SHA256}}.cosign.bundle
+cosign verify-blob --bundle {{.SHA256}}.cosign.bundle \
+  --certificate-identity-regexp '^https://github\.com/PellumAI/mcp-library/\.github/workflows/publish\.yml@refs/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  {{.SHA256}}</pre>
+{{end}}
+{{end}}
+{{end}}{{template "foot" .}}{{end}}

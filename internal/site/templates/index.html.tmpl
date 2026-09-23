@@ -1,0 +1,39 @@
+{{define "index.html.tmpl"}}{{template "head" .}}
+<h1>MCP server packages</h1>
+<p class="lede">Every package here is built reproducibly, named by the sha256 of its bytes and signed with the library key. An MCPGW gateway verifies both against a public key that shipped in its own release. Point <code>mcp_catalog.library_source</code> at <code>{{.Base}}</code>.</p>
+<label class="search">Filter <input id="filter" type="search" placeholder="name, title, category or runtime" autocomplete="off"></label>
+<table class="packages">
+  <thead><tr><th>Package</th><th>Newest version</th><th>Runtime</th><th>Categories</th></tr></thead>
+  <tbody>
+  {{range .Packages}}
+    <tr data-name="{{.Name}}">
+      <td><a href="servers/{{.Name}}/index.html">{{.Title}}</a><div class="desc">{{.Description}}</div></td>
+      <td>{{.Newest.Version.Version}}</td>
+      <td><code>{{.Newest.M.Runtime}}</code></td>
+      <td>{{join .Categories ", "}}</td>
+    </tr>
+  {{else}}
+    <tr><td colspan="4">The library has published no packages yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+<script>
+(function () {
+  var input = document.getElementById('filter');
+  var rows = document.querySelectorAll('table.packages tbody tr[data-name]');
+  fetch('search.json').then(function (r) { return r.json(); }).then(function (records) {
+    var text = {};
+    records.forEach(function (rec) {
+      text[rec.name] = [rec.name, rec.title, rec.description, rec.runtime].concat(rec.categories).join(' ').toLowerCase();
+    });
+    input.addEventListener('input', function () {
+      var q = input.value.trim().toLowerCase();
+      rows.forEach(function (row) {
+        var t = text[row.getAttribute('data-name')] || '';
+        row.hidden = q !== '' && t.indexOf(q) < 0;
+      });
+    });
+  });
+})();
+</script>
+{{template "foot" .}}{{end}}
