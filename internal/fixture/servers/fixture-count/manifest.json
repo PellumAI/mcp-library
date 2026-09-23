@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "fixture-count",
+  "version": "1.0.0",
+  "title": "Fixture count",
+  "description": "A python stdio server with one count tool and one vendored dependency. Contract fixture only.",
+  "license": "Apache-2.0",
+  "runtime": "python@3.12",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["python3", "lib/server.py"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": false,
+  "params": [],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [],
+  "resources": { "cpu_max": "50000 100000", "memory_max": "96Mi", "pids_max": 16 },
+  "env": {},
+  "health": { "initialize_timeout": "10s" }
+}
