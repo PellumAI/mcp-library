@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - gosec
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - (io.Closer).Close
+        - (*os.File).Close
+    gosec:
+      excludes:
+        # G204: this tool's job is to run the pinned docker, git and cosign
+        # CLIs with argv it assembles; every call site builds an argv, never
+        # a shell string.
+        - G204
+        # G304: every path read is a repository or build-output path the
+        # caller named.
+        - G304
+        # G110: decompression is bounded by the pinned upstream archive the
+        # recipe names by digest.
+        - G110
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec

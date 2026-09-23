@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The organisation forbids a write default for GITHUB_TOKEN, so every
+# workflow here declares exactly what it needs. CI needs to read the tree.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    # Not self-hosted: this repository is public and has no reason to reach
+    # the MCPGW fleet, and the reproducible build happens inside a pinned
+    # container anyway, so the host does not enter a digest.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # MCPGW is private, so the two contract files are committed under
+      # contract/ and bound by the digests in EXECUTOR_TARGET.yaml, which
+      # make check verifies offline. When a read token for MCPGW is
+      # configured, this step also proves the committed bytes are exactly
+      # the bytes the pinned MCPGW build publishes. Without it the step says
+      # so and moves on; it never silently passes a comparison it did not
+      # make.
+      - name: Cross-check the committed contract against the pinned MCPGW build
+        env:
+          GH_TOKEN: ${{ secrets.MCPGW_CONTRACT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "MCPGW_CONTRACT_TOKEN is not set; the committed contract is checked against its recorded digests only"
+            exit 0
+          fi
+          scripts/contract-crosscheck.sh
+
+      - name: make check
+        run: make check
+
+  packages:
+    name: packages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # TODO(Task 3): build every touched package twice and compare digests.
+      - name: Build each touched package twice and compare digests
+        run: echo "Task 3 fills this in"

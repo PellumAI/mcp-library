@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "runtimes": ["node@22", "node@20", "python@3.12", "python@3.11", "native"],
+  "policy": "Current and previous LTS of each line, per Decision 15 of the 2026-09-22 spec. A line leaves this window one executor release after it stops being previous LTS, so a package always has a full release of overlap in which to move."
+}

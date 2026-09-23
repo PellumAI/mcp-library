@@ -1,0 +1,31 @@
+# The one MCPGW build this library builds against.
+#
+# Bumping this file is a deliberate act with a checklist: see
+# docs/CURATION.md, "Moving the executor target". It always moves in a pull
+# request of its own.
+#
+# MCPGW is a private repository, so this public repository cannot download
+# the contract from an MCPGW release with its own token. The two contract
+# files are therefore committed under contract/ byte for byte, and the
+# digests below bind them: CI refuses to run if either file does not hash to
+# its recorded digest. When the MCPGW_CONTRACT_TOKEN secret is set, CI also
+# fetches both files from the pinned MCPGW ref and refuses any difference.
+schema_version: 1
+# The MCPGW release tag whose assets these are. Empty until the first MCPGW
+# release that attaches the contract assets exists; mcpgw_commit is the pin
+# until then.
+mcpgw_release: ""
+# The MCPGW commit the two files were taken from.
+mcpgw_commit: "27fbc1d0621ac5a3f6dce7682f59450c5c578193"
+schema_asset: mcpgw-package.schema.json
+schema_sha256: "18f91d93614dc2dc3dd7d8cc865ed202e470987ef75a40ed0af8a0b699b7c112"
+window_asset: runtime-window.json
+window_sha256: "c3137c42a97caaaa60aff463d82b55c65ea8662428a561724b9f847231d86ecb"
+# The runtime window, restated so a reviewer sees it in the diff that moves
+# it. CI refuses a list that differs from the window file's.
+runtimes:
+  - node@22
+  - node@20
+  - python@3.12
+  - python@3.11
+  - native
