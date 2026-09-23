@@ -33,6 +33,11 @@ linters:
         # G110: decompression is bounded by the pinned upstream archive the
         # recipe names by digest.
         - G110
+        # G301, G302, G306: build outputs are published artefacts and are
+        # world-readable by design.
+        - G301
+        - G302
+        - G306
   exclusions:
     rules:
       - path: _test\.go

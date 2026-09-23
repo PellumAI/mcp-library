@@ -49,6 +49,11 @@ jobs:
       - name: make check
         run: make check
 
+      # -count=5 is not superstition: it catches a map-iteration dependency
+      # that a single run can pass by luck.
+      - name: The tar writer is byte-stable
+        run: go test ./internal/pack/... -run TestWrite -count=5
+
   packages:
     name: packages
     runs-on: ubuntu-latest
@@ -62,6 +67,34 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # TODO(Task 3): build every touched package twice and compare digests.
+      - name: Build mcplib
+        run: make build
+
+      # The property the repository exists to have, proven per pull request:
+      # every touched package builds twice to the same digest.
       - name: Build each touched package twice and compare digests
-        run: echo "Task 3 fills this in"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" \
+            | sed -nE 's#^servers/([^/]+)/.*#\1#p' | sort -u)"
+          if [ -z "$changed" ]; then echo "no servers touched"; exit 0; fi
+          for name in $changed; do
+            if [ ! -f "servers/$name/package.yaml" ]; then
+              echo "servers/$name was removed; nothing to build"
+              continue
+            fi
+            for arch in $(./bin/mcplib arches --server "$name"); do
+              ./bin/mcplib build --server "$name" --arch "$arch" --out dist/a
+              ./bin/mcplib build --server "$name" --arch "$arch" --out dist/b
+              da="$(cut -d' ' -f1 < "dist/a/$name-$arch.tar.gz.sha256")"
+              db="$(cut -d' ' -f1 < "dist/b/$name-$arch.tar.gz.sha256")"
+              if [ "$da" != "$db" ]; then
+                echo "$name/$arch is not reproducible: $da != $db" >&2
+                echo "compare with: diffoscope dist/a/$name-$arch.tar.gz dist/b/$name-$arch.tar.gz" >&2
+                exit 1
+              fi
+              echo "$name/$arch reproducible at $da"
+            done
+          done
