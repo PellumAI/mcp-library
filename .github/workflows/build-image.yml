@@ -1,0 +1,83 @@
+name: build-image
+
+# Builds the pinned reproducible build image and pushes it by a dated tag,
+# never :latest. It deliberately does NOT write the digest into
+# EXECUTOR_TARGET.yaml: the build image is an input to every package digest,
+# so moving it is a human's pull request, following docs/CURATION.md, "Moving
+# the build image". The job ends by printing the digest to paste.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - build/**
+      - .github/workflows/build-image.yml
+  workflow_dispatch:
+
+# The organisation forbids a write default for GITHUB_TOKEN.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      # linux/amd64 only, for the reason docs/VETTING.md records: the MCPGW
+      # gateway and executor images are amd64-only today, so an arm64 build
+      # image would build packages nothing can run.
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: build/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ghcr.io/pellumai/mcp-library/build:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/PellumAI/mcp-library
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: The digest to pin
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/pellumai/mcp-library/build@${DIGEST}"
+          echo "Pushed ghcr.io/pellumai/mcp-library/build:${TAG}"
+          echo "To move the library to this image, set in EXECUTOR_TARGET.yaml:"
+          echo "  build_image: \"${ref}\""
+          {
+            echo "### Build image pushed"
+            echo
+            echo "Paste into \`EXECUTOR_TARGET.yaml\`, following docs/CURATION.md:"
+            echo
+            echo '```yaml'
+            echo "build_image: \"${ref}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
