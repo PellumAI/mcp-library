@@ -35,10 +35,14 @@ var shellChars = []string{"|", ";", "&&", "||", ">", "<", "`", "$("}
 // to install anything their lockfile does not name by digest, which is why
 // they, and nothing else, may reach a registry during a build.
 func StepNeedsNetwork(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	cmd := path.Base(argv[0])
 	switch {
-	case len(argv) >= 2 && argv[0] == "npm" && argv[1] == "ci":
+	case len(argv) >= 2 && cmd == "npm" && argv[1] == "ci":
 		return true
-	case len(argv) >= 3 && argv[0] == "go" && argv[1] == "mod" && argv[2] == "download":
+	case len(argv) >= 3 && cmd == "go" && argv[1] == "mod" && argv[2] == "download":
 		return true
 	case isPipInstall(argv) && slices.Contains(argv, "--require-hashes"):
 		return true
@@ -132,6 +136,11 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 	}
 	if err := validateSource(n, r.Source); err != nil {
 		return err
+	}
+	for _, tc := range r.Build.Toolchains {
+		if tc == "native" || !t.AllowsRuntime(tc) {
+			return fmt.Errorf("recipe: %s: build.toolchains: %w", n, t.RuntimeError(tc))
+		}
 	}
 	if (strings.HasPrefix(r.Runtime, "node@") || strings.HasPrefix(r.Runtime, "python@")) && r.Build.Lockfile == "" {
 		return fmt.Errorf("recipe: %s: build.lockfile is required for runtime %q", n, r.Runtime)

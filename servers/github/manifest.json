@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "github",
+  "version": "1.12.2",
+  "title": "GitHub",
+  "description": "Work with GitHub repositories, issues, pull requests, Actions and code search, using a personal access token you supply as a named secret.",
+  "homepage": "https://github.com/github/github-mcp-server",
+  "license": "MIT",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/github-mcp-server", "stdio"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [
+    {
+      "name": "personal_access_token",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "env": "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "description": "A GitHub personal access token; its scopes bound what the tools can do."
+    },
+    {
+      "name": "toolsets",
+      "type": "string",
+      "required": false,
+      "secret": false,
+      "env": "GITHUB_TOOLSETS",
+      "description": "Comma-separated toolsets to enable, for example repos,issues,pull_requests. Unset means the server's defaults."
+    },
+    {
+      "name": "read_only",
+      "type": "bool",
+      "required": false,
+      "secret": false,
+      "env": "GITHUB_READ_ONLY",
+      "default": "false",
+      "description": "Register only read tools."
+    }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [
+    { "host": "api.github.com", "reason": "the GitHub REST and GraphQL API every tool calls" },
+    { "host": "raw.githubusercontent.com", "reason": "file contents for the file-reading tools" }
+  ],
+  "resources": { "cpu_max": "100000 100000", "memory_max": "256Mi", "pids_max": 128 },
+  "env": {},
+  "health": { "initialize_timeout": "20s" }
+}

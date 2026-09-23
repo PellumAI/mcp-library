@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "name": "context7",
+  "version": "4.1.1",
+  "title": "Context7",
+  "description": "Fetch current, version-specific library documentation and code examples into a prompt.",
+  "homepage": "https://github.com/upstash/context7",
+  "license": "MIT",
+  "runtime": "node@22",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["node", "node_modules/@upstash/context7-mcp/dist/index.js"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [
+    {
+      "name": "api_key",
+      "type": "string",
+      "required": false,
+      "secret": true,
+      "env": "CONTEXT7_API_KEY",
+      "description": "Context7 API key. Optional; it raises the rate limit."
+    }
+  ],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [
+    { "host": "context7.com", "reason": "the documentation search and retrieval API every tool calls" }
+  ],
+  "resources": { "cpu_max": "100000 100000", "memory_max": "384Mi", "pids_max": 64 },
+  "env": { "NODE_ENV": "production" },
+  "health": { "initialize_timeout": "20s" }
+}

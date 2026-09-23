@@ -24,7 +24,9 @@ type StepSpec struct {
 	Argv    []string
 	Arch    string
 	Runtime string
-	Network bool
+	// Toolchains are extra runtime lines on PATH after the package's own.
+	Toolchains []string
+	Network    bool
 }
 
 // Runner runs one step inside the pinned build image. The production
@@ -76,6 +78,9 @@ func (d Docker) Run(ctx context.Context, spec StepSpec) error {
 //   - every cache and HOME inside the scratch tree, never on the host.
 func DockerArgs(spec StepSpec, uid, gid int) []string {
 	path := "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+	for i := len(spec.Toolchains) - 1; i >= 0; i-- {
+		path = runtimeRoot + "/" + spec.Toolchains[i] + "/bin:" + path
+	}
 	if spec.Runtime != "" && spec.Runtime != "native" {
 		path = runtimeRoot + "/" + spec.Runtime + "/bin:" + path
 	}

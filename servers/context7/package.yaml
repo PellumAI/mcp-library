@@ -1,0 +1,41 @@
+schema_version: 1
+name: context7
+version: 4.1.1
+runtime: node@22
+arch: [amd64]
+categories: [documentation, developer-tools]
+source:
+  kind: npm
+  package: "@upstash/context7-mcp@4.1.1"
+  integrity: "sha512-fUARTIZGVKzlzQKDhKUg4aIQ3yEU/12STdfxJDDnLMSN7yyHiPvNHI05iFwxkv3vC8G76Wp27MwK6Jucl/C5pA=="
+build:
+  # The published package carries no lockfile, and npm 10's arborist cannot
+  # resolve its dev-dependency peer set, so overlay/ holds a two-file vendor
+  # project: a package.json depending on exactly @upstash/context7-mcp@4.1.1
+  # and the lockfile npm generated for it. That lockfile pins every one of
+  # the 107 dependencies by integrity, and it pins the server itself to the
+  # same sha512 as source.integrity above, so npm ci installs byte for byte
+  # the package the fetch verified.
+  lockfile: package-lock.json
+  steps:
+    - ["npm", "ci", "--omit=dev", "--ignore-scripts"]
+  stage:
+    - { from: package.json, to: package.json }
+    - { from: node_modules, to: node_modules }
+    - { from: LICENSE, to: LICENSE }
+vetting:
+  vetted_on: "2026-09-23"
+  vetted_by: "Galvill, with Claude"
+  sources:
+    - https://www.npmjs.com/package/@upstash/context7-mcp/v/4.1.1
+    - https://github.com/upstash/context7
+  license: MIT
+  egress_rationale: "Dials only the Context7 documentation API."
+  notes: >-
+    Takes the node slot Elasticsearch left: elastic/mcp-server-elasticsearch
+    is deprecated in favour of Elastic Agent Builder and ships 0.4.x only as a
+    container image of a Rust build. stdio is the --transport default. No
+    dependency has an install script, and none is a compiled addon, so the
+    tree is arch-independent; the recipe declares amd64 only for the reason
+    docs/VETTING.md records. CONTEXT7_API_KEY is optional and raises the rate
+    limit. The server honours HTTPS_PROXY, so the egress proxy constrains it.

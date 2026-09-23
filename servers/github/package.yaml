@@ -1,0 +1,46 @@
+schema_version: 1
+name: github
+version: 1.12.2
+runtime: native
+arch: [amd64]
+categories: [developer-tools]
+source:
+  kind: git
+  repo: https://github.com/github/github-mcp-server
+  # v1.12.2, released 2026-09-16; the tag is annotated and peels to this commit.
+  commit: "85598ba6e1256f7ebf4867b95d63b833c4549264"
+build:
+  lockfile: go.sum
+  # The MCP App UIs are embedded into the Go binary with go:embed, so they
+  # are compiled first, with node from the window, exactly as upstream's own
+  # Dockerfile does. Node does not reach the package.
+  toolchains: [node@22]
+  steps:
+    - ["npm", "ci", "--prefix", "ui", "--ignore-scripts"]
+    - ["npm", "run", "build", "--prefix", "ui"]
+    - ["go", "mod", "download"]
+    - ["go", "build", "-trimpath", "-ldflags", "-s -w -buildid= -X main.version=1.12.2", "-o", "out/github-mcp-server", "./cmd/github-mcp-server"]
+  stage:
+    - { from: out/github-mcp-server, to: bin/github-mcp-server }
+    - { from: LICENSE, to: LICENSE }
+    - { from: third-party-licenses.linux.md, to: third-party-licenses.linux.md }
+vetting:
+  vetted_on: "2026-09-23"
+  vetted_by: "Galvill, with Claude"
+  sources:
+    - https://github.com/github/github-mcp-server/tree/v1.12.2
+    - https://github.com/github/github-mcp-server/blob/v1.12.2/cmd/github-mcp-server/main.go
+    - https://github.com/github/github-mcp-server/blob/v1.12.2/Dockerfile
+  license: MIT
+  egress_rationale: "The GitHub REST and GraphQL API, and raw file content for file-reading tools."
+  notes: >-
+    Takes the fifth slot SonarQube left, as the 2026-09-22 spec anticipated.
+    Its credential is the environment variable GITHUB_PERSONAL_ACCESS_TOKEN,
+    not the per-request Authorization header the plan expected: the stdio
+    server reads the token from its environment, and the HTTP mode, which does
+    take a per-request token, listens on a TCP port rather than the unix
+    socket an http package must use. So this entry is an ordinary secret
+    param and upstream_auth stays unfilled in v1; see docs/VETTING.md. The
+    job-log tools follow redirects to Actions storage hosts that cannot be
+    declared as egress, so those tools fail under the proxy. GitHub
+    Enterprise Server needs its host as an instance egress override.
