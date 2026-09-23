@@ -68,7 +68,7 @@ func TestRender_IsCanonical(t *testing.T) {
 	if !bytes.Equal(a, b) {
 		t.Fatalf("renders differ:\n%s\n%s", a, b)
 	}
-	if !strings.Contains(string(a), `"arch": [`+"\n"+`    "amd64"`+"\n  ]") {
+	if !strings.Contains(string(a), `"arch":["amd64"]`) {
 		t.Fatalf("arch not narrowed: %s", a)
 	}
 	if err := schema(t).Validate(a); err != nil {
