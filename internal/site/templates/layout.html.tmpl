@@ -1,0 +1,25 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="{{.Root}}/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{.Root}}/index.html">mcp-library</a>
+  <span class="tag">curated, signed MCP server packages for MCPGW</span>
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer>
+  <p>Generated from <a href="{{.Root}}/index.json">index.json</a> at {{.GeneratedAt}}, signed by {{join .SigningKeys ", "}}.
+  Public keys: {{range .SigningKeys}}<a href="{{$.Root}}/keys/{{.}}.pub">{{.}}.pub</a> {{end}}. Source: <a href="https://github.com/PellumAI/mcp-library">PellumAI/mcp-library</a>.</p>
+</footer>
+</body>
+</html>
+{{end}}
