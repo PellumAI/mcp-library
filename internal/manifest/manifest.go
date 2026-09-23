@@ -105,8 +105,9 @@ func flatten(ve *jsonschema.ValidationError) string {
 
 // Render produces the mcpgw-package.json bytes that go into a tar: the
 // template with arch narrowed to what one blob serves and env extended by the
-// backend, serialised in one canonical form. Go's encoder sorts object keys,
-// so the bytes are a function of the content and nothing else.
+// backend, serialised in one canonical form: compact JSON with object keys
+// sorted, which Go's encoder guarantees, so the bytes are a function of the
+// content and nothing else.
 func Render(template []byte, arch []string, extraEnv map[string]string) ([]byte, error) {
 	var m map[string]any
 	dec := json.NewDecoder(bytes.NewReader(template))
@@ -137,9 +138,11 @@ func Render(template []byte, arch []string, extraEnv map[string]string) ([]byte,
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
 	if err := enc.Encode(m); err != nil {
 		return nil, fmt.Errorf("manifest: render: %w", err)
 	}
-	return buf.Bytes(), nil
+	// Compact, with no trailing newline: this is the form encoding/json
+	// emits a json.RawMessage in, so the copy the index carries is
+	// byte-identical to the file inside the tar rather than merely equal.
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
