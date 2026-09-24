@@ -216,15 +216,19 @@ func TestContainerArgs_HTTPAndNative(t *testing.T) {
 }
 
 func TestDockerMemory(t *testing.T) {
+	// The schema allows K, M and G as well as Ki, Mi and Gi, and MCPGW's
+	// executor (nssandbox.ParseMemoryMax) reads both spellings as binary,
+	// as the kernel does, so both map to docker's binary k, m and g.
 	for in, want := range map[string]string{
 		"384Mi": "384m", "512Ki": "512k", "2Gi": "2g", "1048576": "1048576",
+		"384M": "384m", "512K": "512k", "2G": "2g",
 	} {
 		got, err := dockerMemory(in)
 		if err != nil || got != want {
 			t.Errorf("dockerMemory(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "max", "12Xi", "Mi", "-1Mi"} {
+	for _, bad := range []string{"", "max", "12Xi", "Mi", "-1Mi", "M", "0M", "12m", "12KiB"} {
 		if _, err := dockerMemory(bad); err == nil {
 			t.Errorf("dockerMemory(%q) accepted", bad)
 		}
@@ -234,13 +238,16 @@ func TestDockerMemory(t *testing.T) {
 func TestDockerCPUs(t *testing.T) {
 	for in, want := range map[string]string{
 		"100000 100000": "1.00", "50000 100000": "0.50", "200000 100000": "2.00", "33333 100000": "0.33",
+		// No limit, as the executor writes cgroup cpu.max "max" for both:
+		// ContainerArgs then passes no --cpus at all.
+		"": "", "max": "",
 	} {
 		got, err := dockerCPUs(in)
 		if err != nil || got != want {
 			t.Errorf("dockerCPUs(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "max 100000", "100000", "1 0", "a b", "1000 1000000", "4999 1000000"} {
+	for _, bad := range []string{"max 100000", "100000", "1 0", "a b", "1000 1000000", "4999 1000000", " max"} {
 		if _, err := dockerCPUs(bad); err == nil {
 			t.Errorf("dockerCPUs(%q) accepted", bad)
 		}
@@ -257,6 +264,7 @@ func TestSpecValidate(t *testing.T) {
 		"http no sock":  func(s *Spec) { s.Transport = "http" },
 		"no network":    func(s *Spec) { s.Network = "" },
 		"no pids":       func(s *Spec) { s.Manifest.Resources.PidsMax = 0 },
+		"no memory":     func(s *Spec) { s.Manifest.Resources.MemoryMax = "" },
 		"bad memory":    func(s *Spec) { s.Manifest.Resources.MemoryMax = "max" },
 		"bad cpu":       func(s *Spec) { s.Manifest.Resources.CPUMax = "max 100000" },
 		"egress no proxy": func(s *Spec) {
@@ -528,5 +536,37 @@ func TestStack_StartDrainsStderr(t *testing.T) {
 	tail := c.Stderr()
 	if len(tail) != stderrKeep || !strings.HasSuffix(string(tail), "TAIL-MARKER\n") {
 		t.Errorf("stderr tail: %d bytes, suffix %q", len(tail), tail[max(0, len(tail)-20):])
+	}
+}
+
+// TestContainerArgs_UnlimitedCPU pins I2: cpu_max is optional in the schema
+// and may be "max", both meaning what the executor writes as cgroup cpu.max
+// "max". docker's default is the same, so no --cpus flag is passed.
+func TestContainerArgs_UnlimitedCPU(t *testing.T) {
+	for _, cpu := range []string{"", "max"} {
+		spec := context7Spec(t)
+		spec.Manifest.Resources.CPUMax = cpu
+		if err := spec.Validate(); err != nil {
+			t.Errorf("cpu_max %q: Validate: %v", cpu, err)
+			continue
+		}
+		args := ContainerArgs(spec)
+		if slices.Contains(args, "--cpus") {
+			t.Errorf("cpu_max %q: want no --cpus, got %q", cpu, args)
+		}
+		if got := flagValue(t, args, "--memory"); got != "384m" {
+			t.Errorf("cpu_max %q: --memory = %q, want 384m", cpu, got)
+		}
+	}
+}
+
+func TestContainerArgs_DecimalSpelledMemory(t *testing.T) {
+	spec := context7Spec(t)
+	spec.Manifest.Resources.MemoryMax = "512M"
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := flagValue(t, ContainerArgs(spec), "--memory"); got != "512m" {
+		t.Errorf("--memory = %q, want 512m", got)
 	}
 }

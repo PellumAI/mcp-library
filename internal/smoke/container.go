@@ -155,7 +155,9 @@ func (s Spec) Validate() error {
 //   - tmpfs /state and /tmp owned by that uid, the only writable paths;
 //   - the unpacked tar bound read-only at /srv and the working directory,
 //     as the executor binds its package cache;
-//   - --memory, --cpus and --pids-limit from manifest.resources;
+//   - --memory, --cpus and --pids-limit from manifest.resources, with no
+//     --cpus when cpu_max is absent or "max", as the executor leaves the
+//     CPU unbounded then;
 //   - the internal network only, with the proxy sidecar as HTTPS_PROXY and
 //     HTTP_PROXY: a package that ignores them has no route at all;
 //   - the environment in the executor's order: control variables first,
@@ -183,11 +185,11 @@ func ContainerArgs(spec Spec) []string {
 	}
 	mem, _ := dockerMemory(spec.Manifest.Resources.MemoryMax)
 	cpus, _ := dockerCPUs(spec.Manifest.Resources.CPUMax)
-	args = append(args,
-		"--memory", mem,
-		"--cpus", cpus,
-		"--pids-limit", strconv.Itoa(spec.Manifest.Resources.PidsMax),
-	)
+	args = append(args, "--memory", mem)
+	if cpus != "" {
+		args = append(args, "--cpus", cpus)
+	}
+	args = append(args, "--pids-limit", strconv.Itoa(spec.Manifest.Resources.PidsMax))
 	for _, e := range containerEnv(spec) {
 		args = append(args, "--env", e)
 	}
@@ -276,12 +278,16 @@ func DummyValue(p manifest.Param) (string, bool) {
 	}
 }
 
-// dockerMemory converts a cgroup-style memory_max (bytes, or a Ki, Mi or Gi
-// suffix) into docker's --memory unit, which spells the binary suffixes k, m
-// and g.
+// dockerMemory converts a manifest memory_max (bytes, or a K, M, G, Ki, Mi
+// or Gi suffix, as the schema allows) into docker's --memory unit, which
+// spells the binary suffixes k, m and g. K and Ki are both 1024, as MCPGW's
+// executor reads them (nssandbox.ParseMemoryMax) and as the kernel's
+// memory.max does, so smoke bounds the package exactly as production will.
+// An absent memory_max is refused, not dropped: the schema requires it and
+// the executor refuses to run without it.
 func dockerMemory(v string) (string, error) {
 	num, unit := v, ""
-	for _, suf := range []string{"Ki", "Mi", "Gi"} {
+	for _, suf := range []string{"Ki", "Mi", "Gi", "K", "M", "G"} {
 		if n, ok := strings.CutSuffix(v, suf); ok {
 			num, unit = n, strings.ToLower(suf[:1])
 			break
@@ -289,15 +295,20 @@ func dockerMemory(v string) (string, error) {
 	}
 	n, err := strconv.ParseUint(num, 10, 64)
 	if err != nil || n == 0 {
-		return "", fmt.Errorf("resources.memory_max %q is not a positive byte count with an optional Ki, Mi or Gi suffix", v)
+		return "", fmt.Errorf("resources.memory_max %q is not a positive byte count with an optional K, M, G, Ki, Mi or Gi suffix", v)
 	}
 	return strconv.FormatUint(n, 10) + unit, nil
 }
 
 // dockerCPUs converts a cgroup cpu.max "<quota> <period>" into docker's
-// --cpus, quota over period with two decimals. "max" has no --cpus
-// equivalent and is refused rather than run unlimited.
+// --cpus, quota over period with two decimals. An absent cpu_max and "max"
+// both mean no CPU limit — the executor writes cgroup cpu.max "max" for
+// either — and come back as "", which ContainerArgs reads as no --cpus flag,
+// docker's own default of no limit.
 func dockerCPUs(v string) (string, error) {
+	if v == "" || v == "max" {
+		return "", nil
+	}
 	fields := strings.Fields(v)
 	if len(fields) == 2 {
 		q, err1 := strconv.ParseUint(fields[0], 10, 64)
@@ -312,7 +323,7 @@ func dockerCPUs(v string) (string, error) {
 			return cpus, nil
 		}
 	}
-	return "", fmt.Errorf("resources.cpu_max %q is not \"<quota> <period>\" with both positive", v)
+	return "", fmt.Errorf("resources.cpu_max %q is neither \"max\" nor \"<quota> <period>\" with both positive", v)
 }
 
 // Docker runs the docker CLI.
