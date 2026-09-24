@@ -22,6 +22,22 @@ green test deployment.
 | Rejections | Recorded as a row in the VETTING "Evaluated candidates" table through a docs-only PR, and the issue is closed `rejected`. |
 | Split of work | Skills supply judgment and write-ups; deterministic evidence comes from `mcplib audit` and `mcplib smoke`, which CI re-runs, so the merge gate never rests on the agent's word. |
 
+## Constraints
+
+- No agent runs in CI, and the repository stores no model API key.
+- The skills never apply `approved` or `rejected`, never merge, and never push to `main`.
+- `manifest.json` gains no field; everything library-internal goes in `package.yaml`, because the manifest is contract-pinned against MCPGW.
+- `smoke` runs the exact tar `mcplib build` produced; it never rebuilds or modifies it.
+- `audit` reaches only the source registries and the OSV API; `smoke` gives the package no network except the allow-list proxy.
+- Neither skill executes upstream code outside `mcplib build` and `mcplib smoke`.
+- No skill weakens a check, adds an unevaluated escape hatch, or edits CI to pass.
+- Every new workflow action is pinned by commit SHA, as `scripts/pin-check.sh` enforces.
+
+## Delivery plans
+
+- **A**: `mcplib audit`, `mcplib smoke` with its egress proxy and fixtures, the recipe `smoke:` block, and the CI jobs and branch-protection docs.
+- **B**: the issue form, labels and request page, the PR template changes, and the two skills; depends on A.
+
 ## Flow
 
 ```
