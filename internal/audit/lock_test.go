@@ -89,3 +89,27 @@ func TestReadLock_Unknown(t *testing.T) {
 		t.Fatal("expected an error for an unknown lockfile")
 	}
 }
+
+// TestReadLock_NPM_OmitsWhatNeverShips pins the entries readNPMLock drops:
+// a "dev" package is never installed under npm ci --omit=dev, and a link or
+// versionless entry has no version to ask OSV about — asked with an empty
+// one, OSV matches every advisory the name ever had. devOptional stays: it
+// is an optional dependency of a production package and does ship.
+func TestReadLock_NPM_OmitsWhatNeverShips(t *testing.T) {
+	deps, err := ReadLock("testdata/npm-omit/package-lock.json")
+	if err != nil {
+		t.Fatalf("ReadLock: %v", err)
+	}
+	want := []Dep{
+		{Ecosystem: "npm", Name: "opt-of-prod", Version: "2.0.0"},
+		{Ecosystem: "npm", Name: "shipped", Version: "1.2.3", License: "MIT"},
+	}
+	if len(deps) != len(want) {
+		t.Fatalf("got %d deps %+v, want %d", len(deps), deps, len(want))
+	}
+	for i, d := range deps {
+		if d != want[i] {
+			t.Fatalf("dep %d = %+v, want %+v", i, d, want[i])
+		}
+	}
+}

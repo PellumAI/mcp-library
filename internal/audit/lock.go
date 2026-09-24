@@ -70,11 +70,14 @@ type npmPackageEntry struct {
 	Version          string `json:"version"`
 	HasInstallScript bool   `json:"hasInstallScript"`
 	License          string `json:"license"`
+	Dev              bool   `json:"dev"`
+	Link             bool   `json:"link"`
 }
 
 // readNPMLock reads a package-lock.json v3 tree. Its "packages" map keys
 // every installed package by its node_modules path, including the root
-// project under the empty-string key, which this skips.
+// project under the empty-string key, which this skips, as it does every
+// entry that is not a shipped registry release.
 func readNPMLock(data []byte) ([]Dep, error) {
 	var lf npmLockFile
 	if err := json.Unmarshal(data, &lf); err != nil {
@@ -85,6 +88,15 @@ func readNPMLock(data []byte) ([]Dep, error) {
 	for key, pkg := range lf.Packages {
 		if key == "" {
 			continue // the root project itself, not a locked dependency
+		}
+		// A dev package is never installed: the build runs npm ci
+		// --omit=dev. A link (a workspace member or file: dependency) and
+		// any other versionless entry is local source, not a registry
+		// release, and an empty version sent to OSV matches every advisory
+		// the name ever had. devOptional is kept: it is an optional
+		// dependency of a production package and does ship.
+		if pkg.Dev || pkg.Link || pkg.Version == "" {
+			continue
 		}
 		deps = append(deps, Dep{
 			Ecosystem:     "npm",
