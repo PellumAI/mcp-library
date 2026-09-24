@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pellumai/mcp-library/internal/manifest"
 )
@@ -237,7 +238,7 @@ func TestDockerCPUs(t *testing.T) {
 			t.Errorf("dockerCPUs(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "max 100000", "100000", "1 0", "a b"} {
+	for _, bad := range []string{"", "max 100000", "100000", "1 0", "a b", "1000 1000000", "4999 1000000"} {
 		if _, err := dockerCPUs(bad); err == nil {
 			t.Errorf("dockerCPUs(%q) accepted", bad)
 		}
@@ -349,7 +350,6 @@ func TestStack_UpDown(t *testing.T) {
 	}
 	_ = c.Stdin.Close()
 	_, _ = io.Copy(io.Discard, c.Stdout)
-	_, _ = io.Copy(io.Discard, c.Stderr)
 	if err := c.Wait(); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
@@ -418,5 +418,69 @@ func TestStack_DownRetriesFailedRemoval(t *testing.T) {
 	}
 	if rms != 2 {
 		t.Errorf("network rm ran %d times, want a retry on the second Down", rms)
+	}
+}
+
+func TestSpecValidate_TinyCPU(t *testing.T) {
+	s := context7Spec(t)
+	s.Manifest.Resources.CPUMax = "1000 1000000"
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "0.01") {
+		t.Fatalf("Validate = %v, want a refusal of a share docker reads as unlimited", err)
+	}
+}
+
+func TestTailBuffer(t *testing.T) {
+	b := &tailBuffer{max: 4}
+	for _, w := range []string{"ab", "cd", "e", "fghij", "k"} {
+		_, _ = b.Write([]byte(w))
+	}
+	if got := string(b.Bytes()); got != "hijk" {
+		t.Fatalf("tail = %q, want hijk", got)
+	}
+}
+
+// TestStack_StartDrainsStderr runs a fake package that writes 256 KiB to
+// stderr before it answers initialize. If Start did not drain stderr, the
+// write would block on a full pipe and the call would time out.
+func TestStack_StartDrainsStderr(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "docker")
+	body := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  inspect*) echo true ;;\n" +
+		"  'run --rm'*)\n" +
+		"    head -c 262144 /dev/zero | tr '\\0' x >&2\n" +
+		"    echo TAIL-MARKER >&2\n" +
+		"    read -r line\n" +
+		"    echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}'\n" +
+		"    read -r line || true\n" +
+		"    ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &Stack{Docker: Docker{Binary: script}, Image: "img", MCPLib: "/m", LogDir: "/l"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	defer func() { _ = st.Down(context.Background()) }()
+	if err := st.Up(ctx); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	c, err := st.Start(ctx, context7Spec(t))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	sess := DialStdio(c.Stdout, c.Stdin)
+	if _, err := sess.Call(ctx, "initialize", nil); err != nil {
+		t.Fatalf("initialize behind 256 KiB of stderr: %v", err)
+	}
+	_ = sess.Close()
+	_, _ = io.Copy(io.Discard, c.Stdout)
+	if err := c.Wait(); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	tail := c.Stderr()
+	if len(tail) != stderrKeep || !strings.HasSuffix(string(tail), "TAIL-MARKER\n") {
+		t.Errorf("stderr tail: %d bytes, suffix %q", len(tail), tail[max(0, len(tail)-20):])
 	}
 }

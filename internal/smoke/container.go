@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pellumai/mcp-library/internal/manifest"
@@ -291,7 +292,13 @@ func dockerCPUs(v string) (string, error) {
 		q, err1 := strconv.ParseUint(fields[0], 10, 64)
 		p, err2 := strconv.ParseUint(fields[1], 10, 64)
 		if err1 == nil && err2 == nil && q > 0 && p > 0 {
-			return strconv.FormatFloat(float64(q)/float64(p), 'f', 2, 64), nil
+			cpus := strconv.FormatFloat(float64(q)/float64(p), 'f', 2, 64)
+			if cpus == "0.00" {
+				// docker reads --cpus 0 as no limit at all, the opposite
+				// of the tiny share the manifest asks for.
+				return "", fmt.Errorf("resources.cpu_max %q is under 0.01 CPU, which docker's --cpus cannot express", v)
+			}
+			return cpus, nil
 		}
 	}
 	return "", fmt.Errorf("resources.cpu_max %q is not \"<quota> <period>\" with both positive", v)
@@ -434,22 +441,60 @@ func (s *Stack) Spec(spec Spec) Spec {
 	return spec
 }
 
+// stderrKeep is how much of the package's stderr a Container keeps.
+const stderrKeep = 64 << 10
+
 // Container is a running package container. For stdio, Stdin and Stdout
 // are the package's; for http they are nil and the package is reached over
-// its socket. Stderr is the package's either way.
+// its socket. There is no stderr pipe to read: Start drains stderr itself,
+// because an undrained pipe fills at 64 KiB and blocks a chatty package,
+// which the probe would then misreport as a timeout. Stderr returns the
+// tail.
 type Container struct {
 	Name   string
 	Stdin  io.WriteCloser
 	Stdout io.ReadCloser
-	Stderr io.ReadCloser
+	stderr *tailBuffer
 	cmd    *exec.Cmd
 	docker Docker
 }
 
+// Stderr is the last 64 KiB the package wrote to stderr, for a failure
+// report. It is complete once Wait has returned.
+func (c *Container) Stderr() []byte { return c.stderr.Bytes() }
+
 // Wait returns when the container exits, with docker run's exit status,
-// which is the package's. Call it exactly once, after reading Stdout and
-// Stderr to EOF or abandoning them.
+// which is the package's. Call it exactly once, after reading Stdout to EOF
+// or abandoning it.
 func (c *Container) Wait() error { return c.cmd.Wait() }
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(p)
+	if len(p) >= b.max {
+		b.buf = append(b.buf[:0], p[len(p)-b.max:]...)
+		return n, nil
+	}
+	if over := len(b.buf) + len(p) - b.max; over > 0 {
+		b.buf = append(b.buf[:0], b.buf[over:]...)
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.buf)
+}
 
 // Stop asks the package to exit with SIGTERM, then kills it after grace.
 func (c *Container) Stop(ctx context.Context, grace time.Duration) error {
@@ -465,14 +510,17 @@ func (s *Stack) Start(ctx context.Context, spec Spec) (*Container, error) {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, s.Docker.bin(), ContainerArgs(spec)...)
-	c := &Container{Name: spec.Name, cmd: cmd, docker: s.Docker}
-	var err1, err2, err3 error
+	c := &Container{Name: spec.Name, cmd: cmd, docker: s.Docker, stderr: &tailBuffer{max: stderrKeep}}
+	// A non-*os.File writer makes os/exec copy stderr from its own
+	// goroutine for the container's whole life, and Wait waits for that
+	// copy, so the drain can never stall.
+	cmd.Stderr = c.stderr
+	var err1, err2 error
 	if spec.Transport == TransportStdio {
 		c.Stdin, err1 = cmd.StdinPipe()
 		c.Stdout, err2 = cmd.StdoutPipe()
 	}
-	c.Stderr, err3 = cmd.StderrPipe()
-	if err := errors.Join(err1, err2, err3); err != nil {
+	if err := errors.Join(err1, err2); err != nil {
 		return nil, fmt.Errorf("smoke: pipes: %w", err)
 	}
 	s.pkgs = append(s.pkgs, spec.Name)
