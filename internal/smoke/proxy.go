@@ -53,6 +53,12 @@ type proxy struct {
 	log       io.Writer
 	logMu     sync.Mutex
 	transport http.RoundTripper
+	// connectDefaultPort is the port a portless CONNECT authority resolves
+	// to. It's "443" in production; tests override it (via a type assertion
+	// back to *proxy, since NewProxy returns http.Handler) to point a
+	// portless CONNECT at an httptest backend's ephemeral port, proving the
+	// dial target matches the logged one instead of just asserting it.
+	connectDefaultPort string
 }
 
 // NewProxy returns an http.Handler that proxies CONNECT tunnels and plain
@@ -62,9 +68,10 @@ type proxy struct {
 // log.
 func NewProxy(allow []string, log io.Writer) http.Handler {
 	p := &proxy{
-		allow:     make(map[string]struct{}, len(allow)),
-		log:       log,
-		transport: http.DefaultTransport,
+		allow:              make(map[string]struct{}, len(allow)),
+		log:                log,
+		transport:          http.DefaultTransport,
+		connectDefaultPort: "443",
 	}
 	for _, h := range allow {
 		p.allow[normalizeHost(h)] = struct{}{}
@@ -113,7 +120,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // dials the upstream, answers 200, then copies bytes both ways until either
 // side closes. On a denied host it answers 403 and never dials.
 func (p *proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
-	host, port, err := splitHostPort(r.Host, "443")
+	host, port, err := splitHostPort(r.Host, p.connectDefaultPort)
 	p.logAttempt(host, port, err == nil && p.isAllowed(host))
 	if err != nil {
 		http.Error(w, "malformed CONNECT target", http.StatusBadRequest)
@@ -124,10 +131,16 @@ func (p *proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dial the same normalized host:port the allow decision and log line
+	// used, not the raw r.Host: a portless authority (bare "CONNECT
+	// example.com") has no ":port" for net.Dialer to split, so dialing
+	// r.Host directly fails even though the decision above defaulted the
+	// port and logged allowed:true -- the log would then claim a connection
+	// that never happened.
 	dialCtx, cancel := context.WithTimeout(r.Context(), dialTimeout)
 	defer cancel()
 	var d net.Dialer
-	upstream, err := d.DialContext(dialCtx, "tcp", r.Host)
+	upstream, err := d.DialContext(dialCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

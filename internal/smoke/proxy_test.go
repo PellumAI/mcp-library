@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,82 @@ func TestProxy_PlainHTTP(t *testing.T) {
 	got := attempts[0]
 	if got.Host != backendHost || !got.Allowed {
 		t.Fatalf("attempt = %+v, want host=%s allowed=true", got, backendHost)
+	}
+}
+
+// TestProxy_ConnectPortlessAuthorityDialsLoggedTarget covers a fix-round
+// regression: a portless CONNECT authority ("CONNECT example.com", no
+// ":port") must be dialed at the same host:port the allow decision and log
+// line computed (host defaulted to connectDefaultPort), not at the raw,
+// portless r.Host -- which net.Dialer rejects outright, leaving the log
+// claiming an allowed connection that was never attempted. The test points
+// connectDefaultPort at the backend's real ephemeral port instead of
+// mocking the dial, so a full round trip through the tunnel is the proof
+// that the dialed target and the logged target are the same address.
+func TestProxy_ConnectPortlessAuthorityDialsLoggedTarget(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "hello from portless backend")
+	}))
+	defer backend.Close()
+	backendHost, backendPort := splitTestAddr(t, backend.Listener.Addr().String())
+
+	var logBuf syncBuffer
+	handler := NewProxy([]string{backendHost}, &logBuf)
+	p, ok := handler.(*proxy)
+	if !ok {
+		t.Fatalf("NewProxy returned %T, want *proxy", handler)
+	}
+	p.connectDefaultPort = backendPort // test hook: see doc comment above.
+
+	proxySrv := httptest.NewServer(handler)
+	defer proxySrv.Close()
+
+	conn := dialProxy(t, proxySrv.Listener.Addr().String())
+	// Portless authority: no ":port" after the host, so the proxy must
+	// supply connectDefaultPort itself for both the decision and the dial.
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", backendHost, backendHost)
+
+	br := bufio.NewReader(conn)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	if !strings.Contains(statusLine, "200") {
+		t.Fatalf("CONNECT status = %q, want 200", statusLine)
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read CONNECT headers: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+
+	// The tunnel only reaches the backend if the proxy dialed
+	// backendHost:backendPort -- proving the dial target matches what was
+	// logged below, not the portless raw authority.
+	fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", backendHost)
+	body, err := io.ReadAll(br)
+	if err != nil {
+		t.Fatalf("read tunneled response: %v", err)
+	}
+	if !strings.Contains(string(body), "hello from portless backend") {
+		t.Fatalf("tunneled response = %q, want it to contain the backend body", body)
+	}
+
+	attempts := readAttempts(t, &logBuf)
+	if len(attempts) != 1 {
+		t.Fatalf("logged %d attempts, want 1: %+v", len(attempts), attempts)
+	}
+	wantPort, err := strconv.Atoi(backendPort)
+	if err != nil {
+		t.Fatalf("parse backend port %q: %v", backendPort, err)
+	}
+	got := attempts[0]
+	if got.Host != backendHost || got.Port != wantPort || !got.Allowed {
+		t.Fatalf("attempt = %+v, want host=%s port=%d allowed=true", got, backendHost, wantPort)
 	}
 }
 
