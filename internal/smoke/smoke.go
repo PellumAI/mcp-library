@@ -52,6 +52,9 @@ const (
 	// exitWait bounds how long smoke waits for a container docker has
 	// already been told to kill, or that closed its session, to be reaped.
 	exitWait = 30 * time.Second
+	// settle is how long smoke watches, after its last call, for a package
+	// that is leaving on its own before it starts the shutdown.
+	settle = 500 * time.Millisecond
 )
 
 // exitSIGTERM is docker run's status for a package that died of the
@@ -200,26 +203,31 @@ func Run(ctx context.Context, in Input) (Report, error) {
 	var snap []byte
 	sess, sessionClosed := probe(ctx, c, pkg, filepath.Join(sockDir, filepath.Base(ListenSocket)), initTimeout, started, &rep, &snap)
 
-	// The process must be alive until shutdown. A session that closed on
-	// its own means it is exiting; give docker a moment to reap it.
-	code, early := 0, false
-	if sessionClosed {
+	// The process must be alive until shutdown. A package that exits on
+	// its own after its last answer is gone well before docker reports it,
+	// so polling exited alone misses it and reads its 0 as a clean
+	// shutdown. The stdio reader's EOF, or a session that closed under a
+	// call, is the earlier and reliable sign; settle covers a package still
+	// on its way out, and for http, exited is the only sign there is.
+	earlyExit := func() {
 		select {
-		case code = <-exited:
-			early = true
+		case code := <-exited:
+			rep.fail("the package exited before shutdown, with exit code %d", code)
 		case <-time.After(exitWait):
-		}
-	} else {
-		select {
-		case code = <-exited:
-			early = true
-		default:
+			rep.fail("the package closed its session before shutdown and was still not reaped %v later", exitWait)
 		}
 	}
-	if early {
-		rep.fail("the package exited before shutdown, with exit code %d", code)
+	if sessionClosed {
+		earlyExit()
 	} else {
-		shutdown(ctx, c, sess, pkg.doc.Transport, exited, &rep)
+		select {
+		case <-streamEnded(sess):
+			earlyExit()
+		case code := <-exited:
+			rep.fail("the package exited before shutdown, with exit code %d", code)
+		case <-time.After(settle):
+			shutdown(ctx, c, sess, pkg.doc.Transport, exited, &rep)
+		}
 	}
 	rep.Stderr = c.Stderr()
 

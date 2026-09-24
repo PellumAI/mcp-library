@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/pellumai/mcp-library/internal/manifest"
+	"github.com/pellumai/mcp-library/internal/pack"
 )
 
 func TestEgressHosts(t *testing.T) {
@@ -153,5 +155,72 @@ func TestReadProxyLog(t *testing.T) {
 	got, err = readProxyLog(path)
 	if err != nil || len(got) != 2 || got[1].Host != "example.com" || got[1].Allowed {
 		t.Fatalf("log = %+v, %v", got, err)
+	}
+}
+
+// fakePackageTar packs a tar holding only fixture-echo's manifest, which is
+// all Run reads before it hands the entrypoint to docker.
+func fakePackageTar(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "fixture", "servers", "fixture-echo", manifest.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, manifest.PackageManifestName), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "fixture-echo-amd64.tar.gz")
+	if _, err := pack.WriteFile(dir, out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestRun_ExitAfterLastAnswer is a package that answers everything smoke
+// asks and then exits 0 on its own, before smoke shuts it down. docker takes
+// a while to report the exit, so a check that only polls for it would miss
+// it and then read the 0 as a clean shutdown.
+func TestRun_ExitAfterLastAnswer(t *testing.T) {
+	for _, mode := range []string{ModeFull, ModeInitializeOnly} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "docker")
+			list := ""
+			if mode == ModeFull {
+				list = "    read -r line\n" +
+					"    echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"t\",\"description\":\"d\",\"inputSchema\":{\"type\":\"object\"}}]}}'\n"
+			}
+			body := "#!/bin/sh\n" +
+				"case \"$*\" in\n" +
+				"  inspect*) echo running ;;\n" +
+				"  'run --rm --init'*)\n" +
+				"    read -r line\n" +
+				"    echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}}}}'\n" +
+				"    read -r line\n" +
+				list +
+				"    exit 0 ;;\n" +
+				"esac\n"
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rep, err := Run(context.Background(), Input{
+				Tar:      fakePackageTar(t),
+				Mode:     mode,
+				Snapshot: filepath.Join(dir, SnapshotName),
+				Image:    "img",
+				MCPLib:   "/m",
+				Docker:   Docker{Binary: script},
+				Log:      t.Logf,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.Verdict != VerdictFail || !slices.ContainsFunc(rep.Failures, func(f string) bool {
+				return strings.Contains(f, "exited before shutdown")
+			}) {
+				t.Fatalf("verdict %s, failures %q; want the exit before shutdown", rep.Verdict, rep.Failures)
+			}
+		})
 	}
 }

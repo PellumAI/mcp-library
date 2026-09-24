@@ -120,6 +120,11 @@ type stdioSession struct {
 	closed  bool
 	cause   error
 	done    chan struct{}
+	// eof is closed when the reader stops, which only the package can
+	// cause: it closed its stdout, which it does by exiting. Close does not
+	// close it, so smoke can tell a package that left on its own from one
+	// it shut down.
+	eof chan struct{}
 }
 
 // DialStdio starts a session over a package's stdout (r) and stdin (w). One
@@ -129,7 +134,7 @@ type stdioSession struct {
 // request is answered method-not-found, so a server that waits on, say,
 // roots/list does not hang the probe.
 func DialStdio(r io.Reader, w io.Writer) Session {
-	s := &stdioSession{w: w, pending: map[string]chan incoming{}, done: make(chan struct{})}
+	s := &stdioSession{w: w, pending: map[string]chan incoming{}, done: make(chan struct{}), eof: make(chan struct{})}
 	go s.readLoop(r)
 	return s
 }
@@ -151,7 +156,17 @@ func (s *stdioSession) readLoop(r io.Reader) {
 	if errors.Is(err, io.EOF) {
 		err = nil
 	}
+	close(s.eof)
 	s.shut(err)
+}
+
+// streamEnded is closed when a stdio session's package closed its stdout.
+// It is nil, which never fires, for any other session.
+func streamEnded(sess Session) <-chan struct{} {
+	if s, ok := sess.(*stdioSession); ok {
+		return s.eof
+	}
+	return nil
 }
 
 func (s *stdioSession) handle(line []byte) {

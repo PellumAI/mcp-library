@@ -33,5 +33,10 @@ vetting:
     optional; without it only the registry tools work. A self-hosted
     Terraform Enterprise needs its host added as an instance egress override,
     because an optional param cannot carry an interpolated egress rule.
+    Smoke's dummy TFE_TOKEN makes the server contact app.terraform.io, whose
+    client setup succeeds despite the bogus token, so it lists 56 tools, 47
+    of them HCP Terraform tools; with that host unreachable it lists only
+    the 9 registry tools, so the committed snapshot needs app.terraform.io
+    reachable through the smoke proxy.
     MPL-2.0 permits redistributing the built binary with its source
     available, which the pinned commit is.
