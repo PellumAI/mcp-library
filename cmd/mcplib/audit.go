@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +39,9 @@ func cmdAudit(args []string, stdout, stderr io.Writer) error {
 		Resolve: *resolve,
 	})
 	if err != nil {
+		if errors.Is(err, audit.ErrUsage) {
+			return usageErr("%v", err)
+		}
 		return err
 	}
 

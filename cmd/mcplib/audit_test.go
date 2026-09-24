@@ -28,6 +28,19 @@ func TestCmdAudit_RequiresOne(t *testing.T) {
 	}
 }
 
+func TestCmdAudit_ResolveNonExactVersionIsUsageError(t *testing.T) {
+	// The exactness check runs before any registry lookup, so this never
+	// touches the network despite using the default registry.
+	var stdout, stderr bytes.Buffer
+	err := cmdAudit([]string{"--resolve", "npm:widget@latest"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected an error for a non-exact --resolve version")
+	}
+	if !errors.Is(err, errUsage) {
+		t.Errorf("got error %v, want it to wrap errUsage (exit 2)", err)
+	}
+}
+
 func TestCmdAudit_UnknownResolveKind(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := cmdAudit([]string{"--resolve", "bogus:thing@1.0.0"}, &stdout, &stderr)

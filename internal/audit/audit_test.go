@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -355,6 +356,69 @@ func TestRun_ResolvePyPI_LooksUpSdistSHA256(t *testing.T) {
 	}
 	if report.Source.Integrity != "sha256=sdistsha" {
 		t.Errorf("Report.Source.Integrity = %q, want sha256=sdistsha", report.Source.Integrity)
+	}
+}
+
+func TestRun_ResolveNPM_RejectsDistTag(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("registry must not be queried for a non-exact version, got %s", r.URL.Path)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err := Run(context.Background(), Input{
+		Resolve:     "npm:widget@latest",
+		NPMRegistry: server.URL,
+		Fetch:       func(context.Context, recipe.Source, string) error { return nil },
+	})
+	if err == nil {
+		t.Fatal("expected an error for a dist-tag version")
+	}
+	if !errors.Is(err, ErrUsage) {
+		t.Errorf("got error %v, want it to wrap ErrUsage", err)
+	}
+}
+
+func TestRun_ResolveNPM_RejectsRange(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("registry must not be queried for a non-exact version, got %s", r.URL.Path)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err := Run(context.Background(), Input{
+		Resolve:     "npm:widget@^1.2.0",
+		NPMRegistry: server.URL,
+		Fetch:       func(context.Context, recipe.Source, string) error { return nil },
+	})
+	if err == nil {
+		t.Fatal("expected an error for a semver range")
+	}
+	if !errors.Is(err, ErrUsage) {
+		t.Errorf("got error %v, want it to wrap ErrUsage", err)
+	}
+}
+
+func TestRun_ResolvePyPI_RejectsWildcard(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("registry must not be queried for a non-exact version, got %s", r.URL.Path)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, err := Run(context.Background(), Input{
+		Resolve:      "pypi:widget==1.*",
+		PyPIRegistry: server.URL,
+		Fetch:        func(context.Context, recipe.Source, string) error { return nil },
+	})
+	if err == nil {
+		t.Fatal("expected an error for a wildcard version")
+	}
+	if !errors.Is(err, ErrUsage) {
+		t.Errorf("got error %v, want it to wrap ErrUsage", err)
 	}
 }
 

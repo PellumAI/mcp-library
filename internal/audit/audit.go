@@ -20,6 +20,13 @@ import (
 	"github.com/pellumai/mcp-library/internal/recipe"
 )
 
+// ErrUsage marks a --resolve coordinate that is malformed in a way the
+// caller controls and can fix before retrying -- a non-exact version, most
+// often -- as distinct from a runtime failure like a network error or a
+// registry 404. cmd/mcplib wraps it into its own usage-error exit code (2)
+// rather than the exit-1 a detected failure gets.
+var ErrUsage = errors.New("audit: usage")
+
 // defaultNPMRegistry and defaultPyPIRegistry are used when Input leaves the
 // registry fields empty.
 const (
@@ -112,18 +119,17 @@ func Run(ctx context.Context, in Input) (Report, error) {
 	var (
 		src            recipe.Source
 		serverLicense  string
-		overlayDir     string
+		serverDir      string
 		recipeLockfile string
 	)
 	if in.Server != "" {
-		dir := filepath.Join(in.Root, "servers", in.Server)
-		r, err := recipe.Load(filepath.Join(dir, recipe.FileName))
+		serverDir = filepath.Join(in.Root, "servers", in.Server)
+		r, err := recipe.Load(filepath.Join(serverDir, recipe.FileName))
 		if err != nil {
 			return Report{}, err
 		}
 		src = r.Source
 		serverLicense = r.Vetting.License
-		overlayDir = filepath.Join(dir, recipe.OverlayDir)
 		recipeLockfile = r.Build.Lockfile
 	} else {
 		resolved, err := resolveSource(ctx, in.Resolve, in)
@@ -146,8 +152,8 @@ func Run(ctx context.Context, in Input) (Report, error) {
 	if err := fetch(ctx, src, scratch); err != nil {
 		return Report{}, fmt.Errorf("audit: fetch: %w", err)
 	}
-	if overlayDir != "" {
-		if err := applyOverlay(overlayDir, scratch); err != nil {
+	if serverDir != "" {
+		if err := build.ApplyOverlay(serverDir, scratch); err != nil {
 			return Report{}, fmt.Errorf("audit: overlay: %w", err)
 		}
 	}
@@ -223,77 +229,6 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		Binaries: binaries,
 		Blocking: blocking,
 	}, nil
-}
-
-// applyOverlay copies overlayDir's tree over dst, overwriting any file it
-// also names. This mirrors internal/build's overlay semantics
-// (copyTree(overlay, src, merge=true)) so audit reads exactly the tree a
-// build would produce; an absent overlayDir is not an error, since overlay/
-// is optional.
-func applyOverlay(overlayDir, dst string) error {
-	fi, err := os.Lstat(overlayDir)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	if !fi.IsDir() {
-		return fmt.Errorf("overlay %s is not a directory", overlayDir)
-	}
-	return filepath.WalkDir(overlayDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(overlayDir, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		_ = os.Remove(target)
-		return copyOverlayFile(p, target, d)
-	})
-}
-
-func copyOverlayFile(src, dst string, d fs.DirEntry) error {
-	info, err := d.Info()
-	if err != nil {
-		return err
-	}
-	if info.Mode()&fs.ModeSymlink != 0 {
-		link, err := os.Readlink(src)
-		if err != nil {
-			return err
-		}
-		return os.Symlink(link, dst)
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	mode := os.FileMode(0o644)
-	if info.Mode().Perm()&0o111 != 0 {
-		mode = 0o755
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // findLockfile locates the lockfile a report's dependency evidence should
@@ -405,14 +340,23 @@ func registryOr(v, def string) string {
 	return def
 }
 
+// npmExactVersionRE accepts only an exact semver: no dist-tag ("latest"),
+// no range ("^1.2"), no partial version. Anything else reaches the
+// registry's dist-tag/range resolution, which would silently record
+// whatever that range currently resolves to as if it were a fixed pin.
+var npmExactVersionRE = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
 // resolveNPM looks up name@version's dist.integrity from the registry, the
 // same field build.FetchSource verifies the download against.
 func resolveNPM(ctx context.Context, coordinate, registry string) (recipe.Source, error) {
 	at := strings.LastIndex(coordinate, "@")
 	if at <= 0 || at == len(coordinate)-1 {
-		return recipe.Source{}, fmt.Errorf("audit: npm coordinate %q: expected <name>@<exact version>", coordinate)
+		return recipe.Source{}, fmt.Errorf("%w: npm coordinate %q: expected <name>@<exact version>", ErrUsage, coordinate)
 	}
 	name, version := coordinate[:at], coordinate[at+1:]
+	if !npmExactVersionRE.MatchString(version) {
+		return recipe.Source{}, fmt.Errorf("%w: npm coordinate %q: version %q is not an exact semver; dist-tags, ranges and partial versions resolve to a moving target", ErrUsage, coordinate, version)
+	}
 	endpoint := registry + "/" + strings.Replace(url.PathEscape(name), "%40", "@", 1) + "/" + url.PathEscape(version)
 	body, err := httpGetJSON(ctx, endpoint)
 	if err != nil {
@@ -432,12 +376,21 @@ func resolveNPM(ctx context.Context, coordinate, registry string) (recipe.Source
 	return recipe.Source{Kind: "npm", Package: coordinate, Integrity: doc.Dist.Integrity}, nil
 }
 
+// pypiInexactChars are the characters PEP 440 uses to write a range, a
+// wildcard, an exclusion or a clause list rather than one exact version
+// (e.g. "1.*", ">=1.0,!=1.1", "~=1.0"). Any of them in the version half of
+// a pypi:<name>==<version> coordinate means it isn't an exact pin.
+const pypiInexactChars = "*<>~!, ="
+
 // resolvePyPI looks up name==version's sdist sha256 from the registry, the
 // same digest build.FetchSource verifies the download against.
 func resolvePyPI(ctx context.Context, coordinate, registry string) (recipe.Source, error) {
 	name, version, ok := strings.Cut(coordinate, "==")
 	if !ok || name == "" || version == "" {
-		return recipe.Source{}, fmt.Errorf("audit: pypi coordinate %q: expected <name>==<exact version>", coordinate)
+		return recipe.Source{}, fmt.Errorf("%w: pypi coordinate %q: expected <name>==<exact version>", ErrUsage, coordinate)
+	}
+	if strings.ContainsAny(version, pypiInexactChars) {
+		return recipe.Source{}, fmt.Errorf("%w: pypi coordinate %q: version %q is not an exact pin; wildcards, ranges and exclusions resolve to a moving target", ErrUsage, coordinate, version)
 	}
 	endpoint := registry + "/pypi/" + url.PathEscape(name) + "/" + url.PathEscape(version) + "/json"
 	body, err := httpGetJSON(ctx, endpoint)
@@ -586,7 +539,7 @@ func pkgInfoLicense(path string) string {
 // leaves on screen.
 func (r Report) Summary() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "audit: %s\n", describeSource(r.Source))
+	fmt.Fprintf(&b, "audit: %s\n", build.DescribeSource(r.Source))
 	lockfile := r.Lockfile
 	if lockfile == "" {
 		lockfile = "(none)"
@@ -617,18 +570,4 @@ func (r Report) Summary() string {
 		fmt.Fprintf(&b, "audit: BLOCKING: %s\n", line)
 	}
 	return b.String()
-}
-
-// describeSource is build's own describeSource, unexported there too: a
-// one-line rendering of a pin for a log or summary line.
-func describeSource(s recipe.Source) string {
-	switch s.Kind {
-	case "git":
-		return s.Repo + "@" + s.Commit
-	case "npm", "pypi":
-		return s.Kind + ":" + s.Package
-	case "archive":
-		return s.URL
-	}
-	return s.Kind
 }
