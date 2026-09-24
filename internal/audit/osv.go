@@ -101,7 +101,8 @@ type osvSeverity struct {
 }
 
 type osvAffected struct {
-	Ranges []osvRange `json:"ranges"`
+	Package osvPackage `json:"package"`
+	Ranges  []osvRange `json:"ranges"`
 }
 
 type osvRange struct {
@@ -110,8 +111,10 @@ type osvRange struct {
 }
 
 type osvEvent struct {
-	Introduced string `json:"introduced,omitempty"`
-	Fixed      string `json:"fixed,omitempty"`
+	Introduced   string `json:"introduced,omitempty"`
+	Fixed        string `json:"fixed,omitempty"`
+	LastAffected string `json:"last_affected,omitempty"`
+	Limit        string `json:"limit,omitempty"`
 }
 
 type osvDatabaseSpecific struct {
@@ -168,7 +171,7 @@ func (o OSV) Query(ctx context.Context, deps []Dep) ([]Vuln, error) {
 				vulns = append(vulns, Vuln{
 					ID:       record.ID,
 					Severity: severityOf(*record),
-					Fixed:    fixedVersions(*record),
+					Fixed:    fixedVersions(*record, dep),
 					Dep:      dep,
 				})
 			}
@@ -236,23 +239,130 @@ func severityOf(record osvRecord) string {
 	return "UNKNOWN"
 }
 
-// fixedVersions collects every "fixed" event across every affected range,
-// in first-seen order, without duplicates.
-func fixedVersions(record osvRecord) []string {
+// fixedVersions collects the fixes that apply to dep's installed version:
+// the "fixed" event closing each affected interval that contains it, in
+// first-seen order, without duplicates. A fix for another release branch
+// is not one — grpc-go's advisories fix 1.82.x in 1.82.2 and 1.83.x in
+// 1.83.2, and a dep on 1.83.1 is not fixed by moving to 1.82.2 — so
+// counting every fixed event would block on a fix the dep cannot take.
+//
+// A range whose versions cannot be ordered (an unparseable version, or an
+// ecosystem with no ordering here) contributes every fix it names, since
+// the audit then cannot show the dep is outside it. GIT ranges name
+// commits, not versions, and contribute nothing.
+func fixedVersions(record osvRecord, dep Dep) []string {
 	var fixed []string
 	seen := map[string]bool{}
+	add := func(v string) {
+		if !seen[v] {
+			seen[v] = true
+			fixed = append(fixed, v)
+		}
+	}
 	for _, aff := range record.Affected {
+		if aff.Package.Name != "" && aff.Package.Name != dep.Name {
+			continue
+		}
 		for _, rng := range aff.Ranges {
-			for _, ev := range rng.Events {
-				if ev.Fixed == "" || seen[ev.Fixed] {
-					continue
-				}
-				seen[ev.Fixed] = true
-				fixed = append(fixed, ev.Fixed)
+			if rng.Type == "GIT" {
+				continue
+			}
+			for _, v := range rangeFixes(dep.Ecosystem, dep.Version, rng.Events) {
+				add(v)
 			}
 		}
 	}
 	return fixed
+}
+
+// rangeFixes walks one range's events in version order, as the OSV schema
+// defines them: each "introduced" opens an affected interval, the next
+// "fixed", "last_affected" or "limit" closes it. It returns the fixed
+// version of every interval containing installed.
+func rangeFixes(ecosystem, installed string, events []osvEvent) []string {
+	type point struct {
+		kind, version string
+	}
+	var points []point
+	for _, ev := range events {
+		switch {
+		case ev.Introduced != "":
+			points = append(points, point{"introduced", ev.Introduced})
+		case ev.Fixed != "":
+			points = append(points, point{"fixed", ev.Fixed})
+		case ev.LastAffected != "":
+			points = append(points, point{"last_affected", ev.LastAffected})
+		case ev.Limit != "":
+			points = append(points, point{"limit", ev.Limit})
+		}
+	}
+
+	// cmp orders two versions, "0" (the OSV spelling of "since the
+	// beginning") below every other; ok false means the range is unordered.
+	cmp := func(a, b string) (int, bool) {
+		switch {
+		case a == "0" && b == "0":
+			return 0, true
+		case a == "0":
+			return -1, true
+		case b == "0":
+			return 1, true
+		}
+		return compareVersion(ecosystem, a, b)
+	}
+
+	ordered := true
+	if _, ok := cmp(installed, installed); !ok || installed == "0" {
+		ordered = false
+	}
+	for _, p := range points {
+		if _, ok := cmp(p.version, p.version); !ok {
+			ordered = false
+		}
+	}
+	if !ordered {
+		var all []string
+		for _, p := range points {
+			if p.kind == "fixed" {
+				all = append(all, p.version)
+			}
+		}
+		return all
+	}
+
+	// Insertion sort: stable, and the event lists are a handful long.
+	for i := 1; i < len(points); i++ {
+		for j := i; j > 0; j-- {
+			if c, _ := cmp(points[j-1].version, points[j].version); c <= 0 {
+				break
+			}
+			points[j-1], points[j] = points[j], points[j-1]
+		}
+	}
+
+	var fixes []string
+	open, lower := false, ""
+	for _, p := range points {
+		if p.kind == "introduced" {
+			if !open {
+				open, lower = true, p.version
+			}
+			continue
+		}
+		if !open {
+			continue
+		}
+		open = false
+		if p.kind != "fixed" {
+			continue // last_affected and limit close the interval with no fix
+		}
+		atOrAbove, _ := cmp(installed, lower)
+		below, _ := cmp(installed, p.version)
+		if atOrAbove >= 0 && below < 0 {
+			fixes = append(fixes, p.version)
+		}
+	}
+	return fixes
 }
 
 // CVSS v3.1 base metric weights (https://www.first.org/cvss/v3-1/specification-document#Base-Metrics).

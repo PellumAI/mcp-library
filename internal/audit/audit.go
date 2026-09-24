@@ -70,7 +70,8 @@ type Report struct {
 	// Mach-O file and every .node addon.
 	Binaries []string `json:"binaries"`
 	// Blocking is one line per finding that must stop approval: an OSV
-	// CRITICAL, an OSV HIGH with a fixed version available, or a refusing
+	// CRITICAL, an OSV HIGH with a fix above the installed version on its
+	// own release branch (Vuln.Fixed lists only those), or a refusing
 	// licence (the server's own, or any dependency's). A non-empty
 	// Blocking is `mcplib audit`'s exit-1 condition.
 	Blocking []string `json:"blocking"`

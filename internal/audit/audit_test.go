@@ -183,6 +183,48 @@ func TestRun_BlockingRules(t *testing.T) {
 	}
 }
 
+// TestRun_HighFixedOnlyOnAnotherBranchDoesNotBlock pins M1: a HIGH blocks
+// only when a fix exists above the installed version on its own branch. A
+// dep on 1.83.1 whose advisory fixes the older line in 1.82.2 and its own
+// line in 1.83.2 blocks on 1.83.2 alone; one already on 1.82.5, between
+// the two affected intervals, does not block at all.
+func TestRun_HighFixedOnlyOnAnotherBranchDoesNotBlock(t *testing.T) {
+	const record = `{
+  "id": "HIGH-BRANCHES",
+  "affected": [{"package": {"ecosystem": "npm", "name": "branchy"}, "ranges": [{"type": "SEMVER", "events": [
+    {"introduced": "0"}, {"fixed": "1.82.2"}, {"introduced": "1.83.0-dev"}, {"fixed": "1.83.2"}]}]}],
+  "database_specific": {"severity": "HIGH"}
+}`
+	for _, c := range []struct {
+		version string
+		want    []string
+	}{
+		{"1.83.1", []string{"HIGH-BRANCHES: HIGH vulnerability in branchy@1.83.1, fixed in 1.83.2"}},
+		{"1.82.5", nil},
+	} {
+		batch := `{"results": [{"vulns": [{"id": "HIGH-BRANCHES"}]}]}`
+		server := httptest.NewServer(osvHandler(t, batch, map[string]string{"HIGH-BRANCHES": record}))
+		lock := fmt.Sprintf(`{"packages": {"": {}, "node_modules/branchy": {"version": %q, "license": "MIT"}}}`, c.version)
+		fetch := func(_ context.Context, _ recipe.Source, dir string) error {
+			writeFixtureFile(t, dir, "package-lock.json", lock)
+			writeFixtureFile(t, dir, "package.json", `{"name": "fixture", "license": "MIT"}`)
+			return nil
+		}
+		report, err := Run(context.Background(), Input{
+			Resolve: "git:https://example.com/fixture.git@" + fortyHex,
+			Fetch:   fetch,
+			OSV:     OSV{BaseURL: server.URL, HTTP: server.Client()},
+		})
+		server.Close()
+		if err != nil {
+			t.Fatalf("%s: Run: %v", c.version, err)
+		}
+		if strings.Join(report.Blocking, "|") != strings.Join(c.want, "|") {
+			t.Errorf("%s: Blocking = %v, want %v", c.version, report.Blocking, c.want)
+		}
+	}
+}
+
 const fortyHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func TestRun_ServerMode_UsesRecipeAndOverlay(t *testing.T) {

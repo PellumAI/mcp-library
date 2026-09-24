@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,6 +88,79 @@ func TestCVSSV3Band(t *testing.T) {
 		}
 		if got != tc.want {
 			t.Errorf("cvssV3Band(%q) = %q, want %q", tc.vector, got, tc.want)
+		}
+	}
+}
+
+// grpcRecord is the shape of a real grpc-go advisory: one range with two
+// branches, the older one fixed in 1.82.2 and the development line that
+// forked at 1.83.0-dev fixed in 1.83.2.
+const grpcRecord = `{
+  "id": "GHSA-grpc",
+  "affected": [{
+    "package": {"ecosystem": "Go", "name": "google.golang.org/grpc"},
+    "ranges": [{"type": "SEMVER", "events": [
+      {"introduced": "0"}, {"fixed": "1.82.2"},
+      {"introduced": "1.83.0-dev"}, {"fixed": "1.83.2"}
+    ]}]
+  }]
+}`
+
+func TestFixedVersions_OnlyFixesForTheInstalledBranch(t *testing.T) {
+	var rec osvRecord
+	if err := json.Unmarshal([]byte(grpcRecord), &rec); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		version string
+		want    []string
+	}{
+		{"v1.79.0", []string{"1.82.2"}},
+		{"v1.82.1", []string{"1.82.2"}},
+		{"v1.82.2", nil}, // fixed: between the branches, affected by neither
+		{"v1.82.9", nil},
+		{"v1.83.0", []string{"1.83.2"}},
+		{"v1.83.1", []string{"1.83.2"}},
+		{"v1.83.2", nil},
+		{"v1.90.0", nil},
+	}
+	for _, c := range cases {
+		dep := Dep{Ecosystem: "Go", Name: "google.golang.org/grpc", Version: c.version}
+		got := fixedVersions(rec, dep)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: fixed = %v, want %v", c.version, got, c.want)
+		}
+	}
+}
+
+func TestFixedVersions_RangeShapes(t *testing.T) {
+	dep := Dep{Ecosystem: "npm", Name: "pkg", Version: "2.5.0"}
+	cases := []struct {
+		name, affected string
+		want           []string
+	}{
+		{"branches as separate ranges", `[{"ranges": [
+			{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.9.0"}]},
+			{"type": "SEMVER", "events": [{"introduced": "2.0.0"}, {"fixed": "2.6.0"}]}]}]`, []string{"2.6.0"}},
+		{"last_affected carries no fix", `[{"ranges": [
+			{"type": "SEMVER", "events": [{"introduced": "0"}, {"last_affected": "3.0.0"}]}]}]`, nil},
+		{"another package's range is ignored", `[{"package": {"ecosystem": "npm", "name": "other"}, "ranges": [
+			{"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "9.0.0"}]}]}]`, nil},
+		{"git ranges are not versions", `[{"ranges": [
+			{"type": "GIT", "events": [{"introduced": "0"}, {"fixed": "abc123"}]}]}]`, nil},
+		{"unsorted events are ordered first", `[{"ranges": [
+			{"type": "ECOSYSTEM", "events": [{"fixed": "2.6.0"}, {"introduced": "2.0.0"}, {"introduced": "0"}, {"fixed": "1.0.0"}]}]}]`, []string{"2.6.0"}},
+		{"an unparseable fix is kept, conservatively", `[{"ranges": [
+			{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "next"}]}]}]`, []string{"next"}},
+	}
+	for _, c := range cases {
+		var rec osvRecord
+		if err := json.Unmarshal([]byte(`{"affected": `+c.affected+`}`), &rec); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		got := fixedVersions(rec, dep)
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: fixed = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
