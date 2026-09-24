@@ -582,7 +582,10 @@ func shutdown(ctx context.Context, c *Container, sess Session, transport string,
 		case <-time.After(stdinGrace):
 		}
 	}
-	if err := c.Stop(ctx, termGrace); err != nil {
+	// A package that exits between the grace running out and the stop is
+	// already gone, which is not a shutdown failure; its exit code below
+	// still is judged.
+	if err := c.Stop(ctx, termGrace); err != nil && !strings.Contains(err.Error(), "No such container") {
 		rep.fail("shutdown: %v", err)
 	}
 	select {
