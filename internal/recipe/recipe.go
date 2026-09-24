@@ -37,6 +37,21 @@ type Recipe struct {
 	Source        Source   `yaml:"source"`
 	Build         Build    `yaml:"build"`
 	Vetting       Vetting  `yaml:"vetting"`
+	Smoke         Smoke    `yaml:"smoke"`
+}
+
+// Smoke is the credential escape hatch for servers whose tools require a
+// live secret to enumerate: mode "initialize-only" tells `mcplib smoke` to
+// require only a clean initialize and shutdown, and to write no
+// tools.snapshot.json, so a package that would otherwise never pass a
+// network-isolated smoke run can still ship. The zero value ("") is full
+// mode: initialize, then tools/list and the other capability-advertised
+// listings. Reason is not decoration; the PR template asks a reviewer to
+// confirm it before a signed package skips the snapshot the reviewer would
+// otherwise use to see the tool surface being signed.
+type Smoke struct {
+	Mode   string `yaml:"mode"`
+	Reason string `yaml:"reason"`
 }
 
 // Source names exactly one upstream, pinned. There is no "latest" kind and

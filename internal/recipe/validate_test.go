@@ -127,6 +127,41 @@ func TestValidate_Refusals(t *testing.T) {
 	}
 }
 
+// TestValidate_SmokeBlock covers the recipe's optional smoke escape hatch:
+// initialize-only requires a reason, any other mode is refused, and an
+// absent block (the zero value, as good() leaves it) is full mode and needs
+// no case here because every other test in this file already exercises it.
+func TestValidate_SmokeBlock(t *testing.T) {
+	cases := []struct {
+		name  string
+		smoke recipe.Smoke
+		want  string // "" means the recipe is accepted
+	}{
+		{"initialize-only with a reason", recipe.Smoke{Mode: "initialize-only", Reason: "refuses tools/list without a live credential"}, ""},
+		{"initialize-only without a reason", recipe.Smoke{Mode: "initialize-only"}, "smoke.reason"},
+		{"unknown mode", recipe.Smoke{Mode: "skip"}, `smoke.mode "skip"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, m := good()
+			r.Smoke = c.smoke
+			err := recipe.Validate(r, m, testTarget(t))
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("good smoke block refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted; want error containing %q", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("error %q does not contain %q", err, c.want)
+			}
+		})
+	}
+}
+
 func TestStepNeedsNetwork_OnlyTheThreeLockfileInstallers(t *testing.T) {
 	for _, s := range [][]string{
 		{"npm", "ci", "--omit=dev"},

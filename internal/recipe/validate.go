@@ -170,7 +170,29 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 	if len(r.Vetting.Sources) == 0 {
 		return fmt.Errorf("recipe: %s: vetting.sources must cite at least one primary source", n)
 	}
+	if err := validateSmoke(n, r.Smoke); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateSmoke checks the optional credential escape hatch. The zero value
+// is full mode and needs no reason; "initialize-only" needs one, because it
+// is the reviewer's only evidence that skipping the tool-surface snapshot
+// was warranted rather than convenient; anything else is a typo the recipe
+// should not silently treat as full mode.
+func validateSmoke(n string, s Smoke) error {
+	switch s.Mode {
+	case "":
+		return nil
+	case "initialize-only":
+		if strings.TrimSpace(s.Reason) == "" {
+			return fmt.Errorf("recipe: %s: smoke.reason is required when smoke.mode is initialize-only", n)
+		}
+		return nil
+	default:
+		return fmt.Errorf("recipe: %s: smoke.mode %q is not \"\" or \"initialize-only\"", n, s.Mode)
+	}
 }
 
 func validateSource(n string, s Source) error {
