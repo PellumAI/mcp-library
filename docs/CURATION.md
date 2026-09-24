@@ -38,6 +38,13 @@ server change — CI refuses the two together — and it carries this checklist:
 6. Merge the bump, then the rebuilds, so `main` is never in a state where a
    published package is outside its own declared window.
 
+A bump touches every server even though its diff touches none, so
+`scripts/touched-servers.sh` then selects all of them and `packages`,
+`audit` and `smoke` run the whole library against the new target. The same
+holds for any change under `build/`, `internal/build/` or `internal/smoke/`:
+what every package is built or smoked with has moved, and every package is
+re-proved against it.
+
 When the `MCPGW_CONTRACT_TOKEN` secret is set, CI also proves the committed
 contract files are byte-identical to the ones the pinned MCPGW build
 publishes; MCPGW is private, so without it CI checks the recorded digests only.
