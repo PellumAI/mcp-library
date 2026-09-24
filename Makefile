@@ -1,4 +1,4 @@
-.PHONY: help check build test vet lint lint-install pin-check validate-all mcp-package index site fixture verify clean
+.PHONY: help check build test vet lint lint-install pin-check validate-all mcp-package index site fixture verify smoke clean
 
 MCPLIB  := ./bin/mcplib
 BIN_DIR := $(CURDIR)/bin
@@ -59,6 +59,14 @@ validate-all: build
 mcp-package: build
 	@test -n "$(NAME)" || { echo "NAME is required, e.g. make mcp-package NAME=grafana ARCH=amd64" >&2; exit 2; }
 	@$(MCPLIB) build --server "$(NAME)" --arch "$(or $(ARCH),amd64)" --out dist
+
+## smoke: build and smoke-test one server locally. SERVER=<name> [BUILD_IMAGE=<img>]
+smoke: build
+	@test -n "$(SERVER)" || { echo "SERVER is required, e.g. make smoke SERVER=grafana" >&2; exit 2; }
+	@for arch in $$($(MCPLIB) arches --server "$(SERVER)"); do \
+		$(MCPLIB) build --server "$(SERVER)" --arch "$$arch" --out dist || exit 1; \
+		$(MCPLIB) smoke --server "$(SERVER)" --tar "dist/$(SERVER)-$$arch.tar.gz" $(if $(BUILD_IMAGE),--build-image "$(BUILD_IMAGE)") || exit 1; \
+	done
 
 ## index: regenerate index.json from dist/
 index: build
