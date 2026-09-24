@@ -1,6 +1,9 @@
 package audit
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // LicenseClass is how a licence, or an SPDX expression of licences, is
 // treated for redistribution: permits it outright, needs a human to review
@@ -30,43 +33,148 @@ var licensePermits = map[string]bool{
 var licenseRefusesPrefixes = []string{"GPL", "AGPL", "SSPL", "BUSL", "FSL"}
 
 // ClassifyLicense classifies a single SPDX licence id, or an SPDX
-// expression of them. `A OR B` permits redistribution if either operand
-// does, since the redistributor may choose the favourable term; `A AND B`
-// takes the worse of the two, since both terms bind together. Parentheses
-// are stripped naively before splitting on OR/AND, which is exact for the
-// expressions this library's manifests actually carry.
+// expression of them, with standard SPDX precedence: AND binds tighter
+// than OR, and parentheses group. `A OR B` takes the best (most
+// permissive) operand, since the redistributor may choose the favourable
+// term; `A AND B` takes the worst, since both terms bind together and must
+// both be honoured. `<id> WITH <exception>` attaches the exception to the
+// licence id without changing its class. A malformed expression —
+// unbalanced parentheses, a dangling operator, anything the grammar
+// doesn't accept — classifies as review rather than erroring, since a
+// human still needs to look at the licence field either way.
 func ClassifyLicense(spdx string) LicenseClass {
-	expr := strings.NewReplacer("(", "", ")", "").Replace(spdx)
-	return classifyExpr(expr)
-}
-
-func classifyExpr(expr string) LicenseClass {
-	expr = strings.TrimSpace(expr)
-	if expr == "" {
+	tokens := tokenizeSPDX(spdx)
+	if len(tokens) == 0 {
 		return LicenseReview
 	}
 
-	if parts := strings.Split(expr, " OR "); len(parts) > 1 {
-		best := LicenseRefuses
-		for _, part := range parts {
-			if c := classifyExpr(part); licenseRank(c) < licenseRank(best) {
-				best = c
-			}
+	p := &spdxParser{tokens: tokens}
+	class, err := p.parseExpr()
+	if err != nil || p.pos != len(p.tokens) {
+		return LicenseReview
+	}
+	return class
+}
+
+// tokenizeSPDX splits an SPDX expression into ids, keywords (OR/AND/WITH)
+// and lone "(" / ")" tokens, on whitespace and parenthesis boundaries.
+func tokenizeSPDX(expr string) []string {
+	var tokens []string
+	var cur strings.Builder
+
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
 		}
-		return best
+	}
+	for _, r := range expr {
+		switch r {
+		case '(', ')':
+			flush()
+			tokens = append(tokens, string(r))
+		case ' ', '\t', '\n', '\r':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return tokens
+}
+
+// spdxParser is a recursive-descent parser over the grammar:
+//
+//	orExpr  := andExpr ( "OR" andExpr )*
+//	andExpr := term ( "AND" term )*
+//	term    := "(" orExpr ")" | id ( "WITH" id )?
+type spdxParser struct {
+	tokens []string
+	pos    int
+}
+
+func (p *spdxParser) peek() string {
+	if p.pos >= len(p.tokens) {
+		return ""
+	}
+	return p.tokens[p.pos]
+}
+
+func (p *spdxParser) next() string {
+	t := p.peek()
+	p.pos++
+	return t
+}
+
+func (p *spdxParser) parseExpr() (LicenseClass, error) {
+	return p.parseOr()
+}
+
+func (p *spdxParser) parseOr() (LicenseClass, error) {
+	best, err := p.parseAnd()
+	if err != nil {
+		return "", err
+	}
+	for p.peek() == "OR" {
+		p.next()
+		operand, err := p.parseAnd()
+		if err != nil {
+			return "", err
+		}
+		if licenseRank(operand) < licenseRank(best) {
+			best = operand
+		}
+	}
+	return best, nil
+}
+
+func (p *spdxParser) parseAnd() (LicenseClass, error) {
+	worst, err := p.parseTerm()
+	if err != nil {
+		return "", err
+	}
+	for p.peek() == "AND" {
+		p.next()
+		operand, err := p.parseTerm()
+		if err != nil {
+			return "", err
+		}
+		if licenseRank(operand) > licenseRank(worst) {
+			worst = operand
+		}
+	}
+	return worst, nil
+}
+
+func (p *spdxParser) parseTerm() (LicenseClass, error) {
+	if p.peek() == "(" {
+		p.next()
+		class, err := p.parseOr()
+		if err != nil {
+			return "", err
+		}
+		if p.peek() != ")" {
+			return "", fmt.Errorf("audit: spdx: unbalanced parentheses")
+		}
+		p.next()
+		return class, nil
 	}
 
-	if parts := strings.Split(expr, " AND "); len(parts) > 1 {
-		worst := LicensePermits
-		for _, part := range parts {
-			if c := classifyExpr(part); licenseRank(c) > licenseRank(worst) {
-				worst = c
-			}
-		}
-		return worst
+	id := p.next()
+	if id == "" || id == "OR" || id == "AND" || id == "WITH" || id == ")" {
+		return "", fmt.Errorf("audit: spdx: expected a licence id, got %q", id)
 	}
 
-	return classifyLicenseID(expr)
+	if p.peek() == "WITH" {
+		p.next()
+		exception := p.next()
+		if exception == "" || exception == "OR" || exception == "AND" || exception == "WITH" || exception == ")" {
+			return "", fmt.Errorf("audit: spdx: expected an exception id after WITH")
+		}
+		// The exception attaches to id but never changes its class.
+	}
+
+	return classifyLicenseID(id), nil
 }
 
 func classifyLicenseID(id string) LicenseClass {
