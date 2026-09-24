@@ -20,6 +20,11 @@ type Dep struct {
 	Name          string `json:"name"`
 	Version       string `json:"version"`
 	InstallScript bool   `json:"install_script"`
+	// License is the dependency's own declared licence, when the lockfile
+	// records one. Only package-lock.json does (npm records it from the
+	// resolved package.json at lock time); requirements.txt and go.sum
+	// carry no licence field, so this is always "" for those ecosystems.
+	License string `json:"license,omitempty"`
 }
 
 // ReadLock reads a lockfile, dispatching on its base name: package-lock.json
@@ -64,6 +69,7 @@ type npmLockFile struct {
 type npmPackageEntry struct {
 	Version          string `json:"version"`
 	HasInstallScript bool   `json:"hasInstallScript"`
+	License          string `json:"license"`
 }
 
 // readNPMLock reads a package-lock.json v3 tree. Its "packages" map keys
@@ -85,6 +91,7 @@ func readNPMLock(data []byte) ([]Dep, error) {
 			Name:          npmPackageName(key),
 			Version:       pkg.Version,
 			InstallScript: pkg.HasInstallScript,
+			License:       pkg.License,
 		})
 	}
 	return deps, nil
