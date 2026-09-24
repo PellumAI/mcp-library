@@ -21,12 +21,20 @@ var errUsage = errors.New("usage")
 type command struct {
 	summary string
 	run     func(args []string, stdout, stderr io.Writer) error
+	// hidden commands dispatch normally but usage leaves them off the list --
+	// they're an implementation detail (smoke's sidecar entrypoint), not
+	// something a person is meant to type.
+	hidden bool
 }
 
 var commands = map[string]command{}
 
 func register(name, summary string, run func(args []string, stdout, stderr io.Writer) error) {
 	commands[name] = command{summary: summary, run: run}
+}
+
+func registerHidden(name, summary string, run func(args []string, stdout, stderr io.Writer) error) {
+	commands[name] = command{summary: summary, run: run, hidden: true}
 }
 
 func main() {
@@ -63,7 +71,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "usage: mcplib <command> [flags]")
 	names := make([]string, 0, len(commands))
-	for n := range commands {
+	for n, c := range commands {
+		if c.hidden {
+			continue
+		}
 		names = append(names, n)
 	}
 	sort.Strings(names)

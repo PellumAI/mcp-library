@@ -21,7 +21,7 @@ check: pin-check vet lint test validate-all
 ## build: build the mcplib binary
 build:
 	@mkdir -p bin
-	go build -trimpath -o $(MCPLIB) ./cmd/mcplib
+	CGO_ENABLED=0 go build -trimpath -o $(MCPLIB) ./cmd/mcplib
 
 ## test: unit tests
 test:
