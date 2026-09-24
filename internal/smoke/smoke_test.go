@@ -251,3 +251,27 @@ func TestRun_ExitAfterLastAnswer(t *testing.T) {
 		})
 	}
 }
+
+// TestMkdirShortTemp asserts the work dir lands under the first usable
+// root, /tmp in production, and falls back past one that is not usable.
+func TestMkdirShortTemp(t *testing.T) {
+	good := t.TempDir()
+	missing := filepath.Join(good, "does-not-exist")
+
+	dir, err := mkdirShortTemp("mcplib-smoke-", missing, good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(dir) != good {
+		t.Errorf("dir = %q, want it under %q after %q failed", dir, good, missing)
+	}
+
+	dir, err = mkdirShortTemp("mcplib-smoke-", good)
+	if err != nil || filepath.Dir(dir) != good {
+		t.Errorf("dir = %q, %v; want it under %q", dir, err, good)
+	}
+
+	if _, err := mkdirShortTemp("mcplib-smoke-", missing); err == nil {
+		t.Error("no usable root: want an error")
+	}
+}

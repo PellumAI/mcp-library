@@ -128,8 +128,9 @@ func Run(ctx context.Context, in Input) (Report, error) {
 	}
 
 	// A short root: an http package's socket path must fit the ~108-byte
-	// sun_path limit, which a deep $TMPDIR would exceed.
-	work, err := os.MkdirTemp("", "mcplib-smoke-")
+	// sun_path limit, which a deep $TMPDIR would exceed. /tmp first, and
+	// $TMPDIR only when /tmp is not usable.
+	work, err := mkdirShortTemp("mcplib-smoke-", "/tmp", "")
 	if err != nil {
 		return Report{}, err
 	}
@@ -284,6 +285,19 @@ func readPackage(srv string) (pkgInfo, error) {
 		return pkgInfo{}, fmt.Errorf("smoke: %w", err)
 	}
 	return pkgInfo{doc: doc, rt: rt, endpoint: p.Path}, nil
+}
+
+// mkdirShortTemp makes a temporary directory under the first of roots it
+// can, "" meaning os.TempDir, and returns the last error if none works.
+func mkdirShortTemp(pattern string, roots ...string) (string, error) {
+	err := errors.New("smoke: no temporary directory root")
+	for _, root := range roots {
+		var dir string
+		if dir, err = os.MkdirTemp(root, pattern); err == nil {
+			return dir, nil
+		}
+	}
+	return "", fmt.Errorf("smoke: work dir: %w", err)
 }
 
 // hostTemplateRE is an egress host templated from a param's URL.
