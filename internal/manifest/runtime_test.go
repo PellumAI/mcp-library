@@ -65,3 +65,17 @@ func TestParseRuntime_EgressPortAndCIDR(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRuntime_ParamTypeDefaultEnum asserts the param fields smoke's
+// DummyValue chooses by are read.
+func TestParseRuntime_ParamTypeDefaultEnum(t *testing.T) {
+	raw := []byte(`{"params":[{"name":"region","type":"enum","env":"REGION","required":true,"enum":["eu","us"],"default":"us"}]}`)
+	rt, err := manifest.ParseRuntime(raw)
+	if err != nil {
+		t.Fatalf("ParseRuntime: %v", err)
+	}
+	p := rt.Params[0]
+	if p.Type != "enum" || p.Default != "us" || len(p.Enum) != 2 || p.Enum[0] != "eu" || !p.Required || p.Env != "REGION" {
+		t.Errorf("param = %+v", p)
+	}
+}

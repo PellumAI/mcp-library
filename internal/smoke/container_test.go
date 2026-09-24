@@ -570,3 +570,31 @@ func TestContainerArgs_DecimalSpelledMemory(t *testing.T) {
 		t.Errorf("--memory = %q, want 512m", got)
 	}
 }
+
+// TestDummyValue pins M3: a required non-secret param gets a value its
+// declared type can parse — the manifest's default first, then the first
+// enum value, then a type-appropriate dummy — so a package that validates
+// its config at start is smoked past that check, not failed by it.
+func TestDummyValue(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		p     manifest.Param
+		want  string
+		isSet bool
+	}{
+		{"secret", manifest.Param{Name: "tok", Secret: true, Required: true, Type: "string", Default: "d"}, "smoke-dummy-tok", true},
+		{"optional stays unset", manifest.Param{Name: "o", Type: "int", Default: "5"}, "", false},
+		{"default wins", manifest.Param{Name: "n", Required: true, Type: "int", Default: "30"}, "30", true},
+		{"default beats enum", manifest.Param{Name: "e", Required: true, Type: "enum", Enum: []string{"a", "b"}, Default: "b"}, "b", true},
+		{"first enum", manifest.Param{Name: "e", Required: true, Type: "enum", Enum: []string{"eu", "us"}}, "eu", true},
+		{"int", manifest.Param{Name: "n", Required: true, Type: "int"}, "1", true},
+		{"bool", manifest.Param{Name: "b", Required: true, Type: "bool"}, "true", true},
+		{"string", manifest.Param{Name: "s", Required: true, Type: "string"}, "smoke", true},
+		{"untyped", manifest.Param{Name: "s", Required: true}, "smoke", true},
+	} {
+		got, ok := DummyValue(c.p)
+		if got != c.want || ok != c.isSet {
+			t.Errorf("%s: DummyValue = %q, %v; want %q, %v", c.name, got, ok, c.want, c.isSet)
+		}
+	}
+}

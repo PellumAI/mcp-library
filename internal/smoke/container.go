@@ -264,17 +264,28 @@ func containerEnv(spec Spec) []string {
 }
 
 // DummyValue is what smoke sets a param to, and whether it sets it at all: a
-// secret gets smoke-dummy-<name>, so a leak in a log is recognisable; a
-// required non-secret param gets smoke; an optional non-secret param stays
-// unset, so the package runs on its own default.
+// secret gets smoke-dummy-<name>, so a leak in a log is recognisable; an
+// optional non-secret param stays unset, so the package runs on its own
+// default. A required non-secret param gets a value its type parses, so a
+// package that checks its config at start is smoked past that check rather
+// than failed by it: the manifest's default, else the first enum value,
+// else "1" for an int, "true" for a bool and "smoke" for a string.
 func DummyValue(p manifest.Param) (string, bool) {
 	switch {
 	case p.Secret:
 		return "smoke-dummy-" + p.Name, true
-	case p.Required:
-		return "smoke", true
-	default:
+	case !p.Required:
 		return "", false
+	case p.Default != "":
+		return p.Default, true
+	case len(p.Enum) > 0:
+		return p.Enum[0], true
+	case p.Type == "int":
+		return "1", true
+	case p.Type == "bool":
+		return "true", true
+	default:
+		return "smoke", true
 	}
 }
 

@@ -9,12 +9,17 @@ import (
 // Param is one parameter `mcplib smoke` must supply to the container as an
 // environment variable: the subset of a manifest.json params entry smoke
 // needs to know which ones to fill with a dummy value versus a value it
-// must have (Required) and which to redact from its logs (Secret).
+// must have (Required), which to redact from its logs (Secret), and what a
+// dummy must look like to parse (Type, one of the schema's string, int,
+// bool or enum, and the Default and Enum values it may take).
 type Param struct {
-	Name     string
-	Env      string
-	Secret   bool
-	Required bool
+	Name     string   `json:"name"`
+	Env      string   `json:"env"`
+	Secret   bool     `json:"secret"`
+	Required bool     `json:"required"`
+	Type     string   `json:"type"`
+	Default  string   `json:"default"`
+	Enum     []string `json:"enum"`
 }
 
 // Egress is one rule of the manifest's egress allow-list, the same list
