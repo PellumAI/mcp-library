@@ -32,7 +32,10 @@ import (
 const Dir = "internal/fixture"
 
 // Servers are the packages the fixture carries: one native, one python, so
-// the python backend is exercised end to end on every refresh.
+// the python backend is exercised end to end on every refresh. The list is
+// explicit on purpose: fixture-dialer and fixture-crash sit beside them as
+// smoke's negative fixtures, and packaging either would change the contract
+// fixture MCPGW's tests consume.
 var Servers = []string{"fixture-echo", "fixture-count"}
 
 // The key ids. Old is the fixture's ordinary key; New is the second key the

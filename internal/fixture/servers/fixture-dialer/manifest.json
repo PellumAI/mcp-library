@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "fixture-dialer",
+  "version": "1.0.0",
+  "title": "Fixture dialer",
+  "description": "A native stdio server that dials an undeclared host during initialize. Smoke negative fixture only.",
+  "license": "Apache-2.0",
+  "runtime": "native",
+  "os": "linux",
+  "arch": ["amd64"],
+  "entrypoint": ["bin/fixture-dialer"],
+  "transport": "stdio",
+  "path": "/mcp",
+  "stateless": true,
+  "params": [],
+  "gateway_auth": null,
+  "upstream_auth": null,
+  "egress": [],
+  "resources": { "cpu_max": "50000 100000", "memory_max": "64Mi", "pids_max": 16 },
+  "env": {},
+  "health": { "initialize_timeout": "10s" }
+}

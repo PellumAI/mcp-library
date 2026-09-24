@@ -1,0 +1,14 @@
+[
+  {
+    "name": "echo",
+    "description": "Return the text it is given.",
+    "inputSchema": {
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  }
+]

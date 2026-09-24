@@ -1,0 +1,9 @@
+[
+  {
+    "name": "count",
+    "description": "Count calls.",
+    "inputSchema": {
+      "type": "object"
+    }
+  }
+]
