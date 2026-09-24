@@ -1,0 +1,3 @@
+certifi==2024.8.30 \
+    --hash=sha256:922820b53db7a7257ffbda3f597266d964053cbb12b2df5b9d63f83d3f0d5c8
+requests>=2.32.3
