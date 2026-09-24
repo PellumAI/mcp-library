@@ -231,7 +231,31 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Decided before anything else, because packages uploads dist-a only
+      # when it built something: on a PR that touches no server, or only
+      # removes one, there is no artifact, and the download below must be
+      # skipped rather than fail the required check before its own "no
+      # servers touched" success.
+      - name: Servers to smoke
+        id: touched
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          present=""
+          for name in $(scripts/touched-servers.sh); do
+            if [ -f "servers/$name/package.yaml" ]; then
+              present="$present $name"
+            else
+              echo "servers/$name was removed; nothing to smoke"
+            fi
+          done
+          present="${present# }"
+          [ -n "$present" ] || echo "no servers touched"
+          echo "servers=$present" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.touched.outputs.servers != ''
         with:
           name: dist-a
           path: dist/a
@@ -250,21 +274,16 @@ jobs:
 
       - name: Smoke each touched server's tar, per arch
         env:
-          BASE_REF: ${{ github.base_ref }}
+          SERVERS: ${{ steps.touched.outputs.servers }}
         run: |
           set -euo pipefail
           mkdir -p dist/smoke
-          changed="$(scripts/touched-servers.sh)"
-          if [ -z "$changed" ]; then
+          if [ -z "$SERVERS" ]; then
             echo "no servers touched"
             exit 0
           fi
           status=0
-          for name in $changed; do
-            if [ ! -f "servers/$name/package.yaml" ]; then
-              echo "servers/$name was removed; nothing to smoke"
-              continue
-            fi
+          for name in $SERVERS; do
             for arch in $(./bin/mcplib arches --server "$name"); do
               ./bin/mcplib smoke --server "$name" \
                 --tar "dist/a/$name-$arch.tar.gz" \
