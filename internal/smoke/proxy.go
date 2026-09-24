@@ -8,6 +8,7 @@ package smoke
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -46,10 +47,12 @@ var hopByHopHeaders = []string{
 }
 
 // proxy is the CONNECT allow-list egress proxy. It admits CONNECT tunnels
-// and plain absolute-URI HTTP requests only to hosts in allow, on any port,
+// and plain absolute-URI HTTP requests only to host:port pairs in allow,
 // and logs every attempt -- admitted or denied -- to its log writer.
 type proxy struct {
-	allow     map[string]struct{}
+	// allow maps a normalized host to the ports it may be reached on; a
+	// set holding anyPort admits every port.
+	allow     map[string]map[int]struct{}
 	log       io.Writer
 	logMu     sync.Mutex
 	transport http.RoundTripper
@@ -61,22 +64,68 @@ type proxy struct {
 	connectDefaultPort string
 }
 
+// anyPort is the port an allow-list entry with no ":port" admits: all of
+// them, as an egress rule with no port means.
+const anyPort = 0
+
 // NewProxy returns an http.Handler that proxies CONNECT tunnels and plain
-// absolute-URI HTTP requests only to hosts in allow (bare hostnames,
-// compared case-insensitively with a trailing dot stripped; any port is
-// allowed for an allowed host), logging every attempt as one JSON line to
-// log.
+// absolute-URI HTTP requests only to what allow names, logging every
+// attempt as one JSON line to log. An entry is a bare host, which admits
+// any port, or host:port, which admits that port alone; hosts compare
+// case-insensitively with a trailing dot stripped. An entry ParseAllow
+// would refuse admits nothing, so a malformed list fails closed.
 func NewProxy(allow []string, log io.Writer) http.Handler {
 	p := &proxy{
-		allow:              make(map[string]struct{}, len(allow)),
+		allow:              make(map[string]map[int]struct{}, len(allow)),
 		log:                log,
 		transport:          http.DefaultTransport,
 		connectDefaultPort: "443",
 	}
-	for _, h := range allow {
-		p.allow[normalizeHost(h)] = struct{}{}
+	for _, entry := range allow {
+		host, port, err := parseAllowEntry(entry)
+		if err != nil {
+			continue
+		}
+		host = normalizeHost(host)
+		if p.allow[host] == nil {
+			p.allow[host] = map[int]struct{}{}
+		}
+		p.allow[host][port] = struct{}{}
 	}
 	return p
+}
+
+// ParseAllow checks every allow-list entry NewProxy will read, so the
+// egress-proxy command can refuse a malformed list at start rather than
+// run a proxy that silently admits less than it was asked to.
+func ParseAllow(allow []string) error {
+	for _, entry := range allow {
+		if _, _, err := parseAllowEntry(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// parseAllowEntry splits host or host:port. A bare IPv6 literal, which
+// net.SplitHostPort cannot split, is a host with any port; bracket it to
+// name a port.
+func parseAllowEntry(entry string) (string, int, error) {
+	host, portStr, err := net.SplitHostPort(entry)
+	if err != nil {
+		if strings.Count(entry, ":") > 1 || !strings.Contains(entry, ":") {
+			if entry == "" {
+				return "", 0, fmt.Errorf("egress allow-list: empty entry")
+			}
+			return entry, anyPort, nil
+		}
+		return "", 0, fmt.Errorf("egress allow-list: %q: %w", entry, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if host == "" || err != nil || port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("egress allow-list: %q is not host or host:port with a port from 1 to 65535", entry)
+	}
+	return host, port, nil
 }
 
 // normalizeHost applies the proxy's host-comparison rule: lowercase, and a
@@ -85,9 +134,14 @@ func normalizeHost(host string) string {
 	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
-func (p *proxy) isAllowed(host string) bool {
-	_, ok := p.allow[normalizeHost(host)]
-	return ok
+func (p *proxy) isAllowed(host string, port int) bool {
+	ports, ok := p.allow[normalizeHost(host)]
+	if !ok {
+		return false
+	}
+	_, anyOK := ports[anyPort]
+	_, portOK := ports[port]
+	return anyOK || portOK
 }
 
 // logAttempt writes one JSON line for the attempt. Writes are serialized so
@@ -116,17 +170,17 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.servePlain(w, r)
 }
 
-// serveConnect handles `CONNECT host:port HTTP/1.1`: on an allowed host it
+// serveConnect handles `CONNECT host:port HTTP/1.1`: on an allowed host:port it
 // dials the upstream, answers 200, then copies bytes both ways until either
 // side closes. On a denied host it answers 403 and never dials.
 func (p *proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	host, port, err := splitHostPort(r.Host, p.connectDefaultPort)
-	p.logAttempt(host, port, err == nil && p.isAllowed(host))
+	p.logAttempt(host, port, err == nil && p.isAllowed(host, port))
 	if err != nil {
 		http.Error(w, "malformed CONNECT target", http.StatusBadRequest)
 		return
 	}
-	if !p.isAllowed(host) {
+	if !p.isAllowed(host, port) {
 		http.Error(w, "host not allowed", http.StatusForbidden)
 		return
 	}
@@ -212,7 +266,7 @@ func (p *proxy) servePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed := p.isAllowed(host)
+	allowed := p.isAllowed(host, port)
 	p.logAttempt(host, port, allowed)
 	if !allowed {
 		http.Error(w, "host not allowed", http.StatusForbidden)

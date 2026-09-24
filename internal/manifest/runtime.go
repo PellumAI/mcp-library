@@ -17,11 +17,15 @@ type Param struct {
 	Required bool
 }
 
-// Egress is one host the manifest's egress allow-list names, the same list
-// smoke's proxy sidecar admits and nothing else reaches.
+// Egress is one rule of the manifest's egress allow-list, the same list
+// smoke's proxy sidecar admits and nothing else reaches. The schema makes a
+// rule name either a Host or a CIDR, optionally on one Port; Port 0 means
+// any port.
 type Egress struct {
-	Host   string
-	Reason string
+	Host   string `json:"host"`
+	CIDR   string `json:"cidr"`
+	Port   int    `json:"port"`
+	Reason string `json:"reason"`
 }
 
 // Runtime is the manifest fields `mcplib smoke` needs to run a package's

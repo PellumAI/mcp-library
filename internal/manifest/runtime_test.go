@@ -42,3 +42,26 @@ func TestParseRuntime_BadTimeout(t *testing.T) {
 		t.Fatal("a health.initialize_timeout ParseDuration cannot read is accepted")
 	}
 }
+
+// TestParseRuntime_EgressPortAndCIDR asserts both optional egress_rule
+// fields the schema defines are read, so smoke can enforce a port and
+// refuse a cidr rule instead of silently widening or dropping either.
+func TestParseRuntime_EgressPortAndCIDR(t *testing.T) {
+	raw := []byte(`{"egress":[{"host":"api.example.com","port":443,"reason":"api"},{"cidr":"10.0.0.0/8","port":5432}]}`)
+	rt, err := manifest.ParseRuntime(raw)
+	if err != nil {
+		t.Fatalf("ParseRuntime: %v", err)
+	}
+	want := []manifest.Egress{
+		{Host: "api.example.com", Port: 443, Reason: "api"},
+		{CIDR: "10.0.0.0/8", Port: 5432},
+	}
+	if len(rt.Egress) != len(want) {
+		t.Fatalf("egress = %+v, want %+v", rt.Egress, want)
+	}
+	for i := range want {
+		if rt.Egress[i] != want[i] {
+			t.Errorf("egress[%d] = %+v, want %+v", i, rt.Egress[i], want[i])
+		}
+	}
+}

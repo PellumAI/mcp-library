@@ -34,3 +34,16 @@ func TestSummarize(t *testing.T) {
 		}
 	}
 }
+
+// TestCmdEgressProxy_RefusesMalformedAllow asserts a bad --allow entry is a
+// usage error before the proxy listens, not a proxy that quietly admits
+// less than smoke asked for.
+func TestCmdEgressProxy_RefusesMalformedAllow(t *testing.T) {
+	for _, allow := range []string{"a.example:https", "a.example:0", ":443"} {
+		var stdout, stderr bytes.Buffer
+		err := cmdEgressProxy([]string{"--listen", "127.0.0.1:0", "--allow", allow}, &stdout, &stderr)
+		if !errors.Is(err, errUsage) {
+			t.Errorf("--allow %q: err = %v, want a usage error (exit 2)", allow, err)
+		}
+	}
+}

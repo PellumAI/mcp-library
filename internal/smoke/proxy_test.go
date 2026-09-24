@@ -261,3 +261,93 @@ func splitTestAddr(t *testing.T, addr string) (host, port string) {
 	}
 	return host, port
 }
+
+// connectStatus sends one CONNECT for target through the proxy at addr and
+// returns the response's status line.
+func connectStatus(t *testing.T, addr, target string) string {
+	t.Helper()
+	conn := dialProxy(t, addr)
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	status, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	return status
+}
+
+// TestProxy_EnforcesDeclaredPort pins I3: an egress rule's port binds. An
+// allowed host on a port the rule does not name is denied and logged
+// denied; a rule with no port still admits any.
+func TestProxy_EnforcesDeclaredPort(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+	defer backend.Close()
+	host, port := splitTestAddr(t, backend.Listener.Addr().String())
+
+	var logBuf syncBuffer
+	srv := httptest.NewServer(NewProxy([]string{host + ":" + port, "anyport.example"}, &logBuf))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	if s := connectStatus(t, addr, net.JoinHostPort(host, port)); !strings.Contains(s, "200") {
+		t.Errorf("declared port: CONNECT status = %q, want 200", s)
+	}
+	if s := connectStatus(t, addr, net.JoinHostPort(host, "1")); !strings.Contains(s, "403") {
+		t.Errorf("undeclared port: CONNECT status = %q, want 403", s)
+	}
+	if s := connectStatus(t, addr, host); !strings.Contains(s, "403") {
+		t.Errorf("portless CONNECT defaults to 443, undeclared: status = %q, want 403", s)
+	}
+
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(mustParseURL(t, srv.URL))}}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, "1") + "/")
+	if err != nil {
+		t.Fatalf("plain GET via proxy: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("plain HTTP on an undeclared port: status = %d, want 403", resp.StatusCode)
+	}
+
+	p := NewProxy([]string{"anyport.example", "pinned.example:443"}, io.Discard).(*proxy)
+	for _, c := range []struct {
+		host string
+		port int
+		want bool
+	}{
+		{"anyport.example", 1, true},
+		{"anyport.example", 443, true},
+		{"pinned.example", 443, true},
+		{"PINNED.example.", 443, true},
+		{"pinned.example", 8443, false},
+		{"other.example", 443, false},
+	} {
+		if got := p.isAllowed(c.host, c.port); got != c.want {
+			t.Errorf("isAllowed(%s, %d) = %v, want %v", c.host, c.port, got, c.want)
+		}
+	}
+
+	var denied int
+	for _, a := range readAttempts(t, &logBuf) {
+		if !a.Allowed {
+			denied++
+		}
+	}
+	if denied != 3 {
+		t.Errorf("logged %d denied attempts, want 3", denied)
+	}
+}
+
+func TestParseAllow(t *testing.T) {
+	for _, ok := range []string{"a.example", "a.example:443", "[::1]:8443", "a.example:65535"} {
+		if err := ParseAllow([]string{ok}); err != nil {
+			t.Errorf("ParseAllow(%q): %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"a.example:", "a.example:https", "a.example:0", "a.example:65536", ":443"} {
+		if err := ParseAllow([]string{bad}); err == nil {
+			t.Errorf("ParseAllow(%q) accepted", bad)
+		}
+	}
+}

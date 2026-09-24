@@ -31,7 +31,7 @@ func init() {
 func cmdEgressProxy(args []string, stdout, stderr io.Writer) error {
 	fs := newFlags("egress-proxy", stderr)
 	listen := fs.String("listen", ":3128", "address to listen on")
-	allow := fs.String("allow", "", "comma-separated hostnames to allow (any port)")
+	allow := fs.String("allow", "", "comma-separated host or host:port entries to allow; a bare host allows any port")
 	logPath := fs.String("log", "", "path to append the JSON-lines attempt log; defaults to stderr")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -43,6 +43,9 @@ func cmdEgressProxy(args []string, stdout, stderr io.Writer) error {
 		if h != "" {
 			hosts = append(hosts, h)
 		}
+	}
+	if err := smoke.ParseAllow(hosts); err != nil {
+		return usageErr("%v", err)
 	}
 
 	logWriter := stderr

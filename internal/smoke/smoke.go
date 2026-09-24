@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -292,16 +294,31 @@ var hostTemplateRE = regexp.MustCompile(`^\$\{([A-Za-z0-9_]+)\.host\}$`)
 // never resolves.
 const smokeDomain = ".smoke.invalid"
 
-// egressHosts is the proxy's allow-list and the param values it implies. A
-// host templated as ${<param>.host} becomes <param>.smoke.invalid, and the
-// param is set to https://<param>.smoke.invalid so the package dials that
-// host and nothing else.
+// egressHosts is the proxy's allow-list and the param values it implies.
+// Each entry is a host, or host:port when the rule names a port, which the
+// proxy then enforces. A host templated as ${<param>.host} becomes
+// <param>.smoke.invalid, and the param is set to https://<param>.smoke.invalid
+// so the package dials that host and nothing else.
+//
+// A cidr rule is refused: the proxy decides on the name a client asks it to
+// reach, never on an address, so it has no way to admit a range. Dropping
+// the rule would smoke a package with less egress than production grants
+// and pass or fail it for the wrong reason.
 func egressHosts(rt manifest.Runtime) ([]string, map[string]string, error) {
 	allow := []string{}
 	values := map[string]string{}
+	withPort := func(host string, port int) string {
+		if port == 0 {
+			return host
+		}
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	}
 	for _, e := range rt.Egress {
+		if e.CIDR != "" {
+			return nil, nil, fmt.Errorf("smoke: cidr egress is not supported by smoke: rule %q; the proxy admits host names only", e.CIDR)
+		}
 		if !strings.Contains(e.Host, "${") {
-			allow = append(allow, e.Host)
+			allow = append(allow, withPort(e.Host, e.Port))
 			continue
 		}
 		m := hostTemplateRE.FindStringSubmatch(e.Host)
@@ -312,7 +329,7 @@ func egressHosts(rt manifest.Runtime) ([]string, map[string]string, error) {
 			return nil, nil, fmt.Errorf("smoke: egress host %q names no param %q", e.Host, m[1])
 		}
 		host := m[1] + smokeDomain
-		allow = append(allow, host)
+		allow = append(allow, withPort(host, e.Port))
 		values[m[1]] = "https://" + host
 	}
 	return allow, values, nil

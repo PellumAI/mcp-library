@@ -42,6 +42,33 @@ func TestEgressHosts(t *testing.T) {
 	}
 }
 
+// TestEgressHosts_PortAndCIDR pins I3: a rule's port travels into the
+// allow-list as host:port, and a cidr rule is refused out loud rather than
+// dropped, since the proxy admits names and cannot enforce an address range.
+func TestEgressHosts_PortAndCIDR(t *testing.T) {
+	rt := manifest.Runtime{
+		Params: []manifest.Param{{Name: "u", Env: "U", Required: true}},
+		Egress: []manifest.Egress{
+			{Host: "api.example.com", Port: 443},
+			{Host: "any.example.com"},
+			{Host: "${u.host}", Port: 8443},
+		},
+	}
+	allow, _, err := egressHosts(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"api.example.com:443", "any.example.com", "u.smoke.invalid:8443"}; !slices.Equal(allow, want) {
+		t.Errorf("allow = %q, want %q", allow, want)
+	}
+
+	rt.Egress = []manifest.Egress{{Host: "api.example.com"}, {CIDR: "10.0.0.0/8", Port: 5432}}
+	_, _, err = egressHosts(rt)
+	if err == nil || !strings.Contains(err.Error(), "cidr egress is not supported by smoke") {
+		t.Fatalf("cidr rule: err = %v, want a refusal naming cidr egress", err)
+	}
+}
+
 func TestCheckInputSchema(t *testing.T) {
 	for _, c := range []struct {
 		schema string
