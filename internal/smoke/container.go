@@ -41,11 +41,6 @@ const (
 	ListenSocketEnv = "MCPGW_LISTEN_SOCKET"
 	// nobody is the non-root uid:gid the package runs as.
 	nobody = "65534:65534"
-	// basePath follows the runtime line on PATH. The executor's PATH is the
-	// line alone because bwrap binds nothing else; the build image has a
-	// whole root file system, so the system directories come after the line
-	// the way build.DockerArgs orders them.
-	basePath = "/usr/local/bin:/usr/bin:/bin"
 	// proxyPort is where the egress proxy sidecar listens.
 	proxyPort = "3128"
 	// proxyLogName is the proxy's attempt log inside Stack.LogDir.
@@ -85,6 +80,10 @@ type Spec struct {
 	Manifest manifest.Runtime
 	// Env is the manifest's env map.
 	Env map[string]string
+	// ParamValues overrides DummyValue for the params it names, by param
+	// name. smoke uses it for a param an egress host is templated from,
+	// which needs a URL whose host the proxy admits rather than "smoke".
+	ParamValues map[string]string
 	// Transport is stdio or http.
 	Transport string
 	// SocketDir is the host directory an http package's socket appears
@@ -147,6 +146,10 @@ func (s Spec) Validate() error {
 // spec.Validate passed. Every flag is load-bearing and the tests assert them
 // field by field:
 //
+//   - --init, so the package is not PID 1: under the executor bwrap is the
+//     namespace's init, and a PID 1 that installs no SIGTERM handler, which
+//     is most servers, would ignore the SIGTERM smoke's shutdown sends, or,
+//     for a Go binary, exit 2 instead of dying of it;
 //   - --read-only root, the non-root uid, every capability dropped and
 //     no-new-privileges, so the package can change nothing but its tmpfs;
 //   - tmpfs /state and /tmp owned by that uid, the only writable paths;
@@ -159,7 +162,7 @@ func (s Spec) Validate() error {
 //     then the manifest env, then params, with control names dropped from
 //     both, then the proxy variables last and unconditionally.
 func ContainerArgs(spec Spec) []string {
-	args := []string{"run", "--rm", "--name", spec.Name}
+	args := []string{"run", "--rm", "--init", "--name", spec.Name}
 	if spec.Transport == TransportStdio {
 		args = append(args, "-i")
 	}
@@ -203,9 +206,15 @@ func ContainerArgs(spec Spec) []string {
 // containerEnv is the package's environment as NAME=value lines, ordered as
 // ContainerArgs documents.
 func containerEnv(spec Spec) []string {
-	path := basePath
+	// PATH is the runtime line alone, as the executor sets it: bwrap binds
+	// no system directories there, so a package that shells out to, say,
+	// /usr/bin/git works here only by accident and must fail. A native
+	// package gets an empty PATH. The image's root file system is still
+	// present, which is what the http umask wrapper's absolute /bin/sh
+	// relies on.
+	path := ""
 	if spec.Runtime != "" && spec.Runtime != "native" {
-		path = runtimeRoot + "/" + spec.Runtime + "/bin:" + path
+		path = runtimeRoot + "/" + spec.Runtime + "/bin"
 	}
 	names := []string{"PATH", "HOME", "TMPDIR", ListenSocketEnv}
 	values := map[string]string{
@@ -232,7 +241,9 @@ func containerEnv(spec Spec) []string {
 		add(k, spec.Env[k])
 	}
 	for _, p := range spec.Manifest.Params {
-		if v, ok := DummyValue(p); ok {
+		if v, ok := spec.ParamValues[p.Name]; ok {
+			add(p.Env, v)
+		} else if v, ok := DummyValue(p); ok {
 			add(p.Env, v)
 		}
 	}
@@ -330,6 +341,15 @@ func (d Docker) run(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// logs returns a container's combined stdout and stderr, trimmed.
+func (d Docker) logs(ctx context.Context, name string) (string, error) {
+	out, err := exec.CommandContext(ctx, d.bin(), "logs", name).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker logs: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Stack is one smoke run's Docker resources: an internal network, the egress
 // proxy sidecar on it and on the default bridge, and the package container on
 // the internal network only. The package's only reachable peer is the proxy.
@@ -392,10 +412,12 @@ func (s *Stack) Up(ctx context.Context) error {
 
 // proxyArgs is the proxy sidecar's docker run. It runs as the caller's uid
 // and gid so the log it writes into LogDir stays readable and deletable on
-// the host, and is otherwise as locked down as the package.
+// the host, and is otherwise as locked down as the package. It has no --rm:
+// a proxy that exits at once must leave its container behind so waitRunning
+// can report its logs; Down removes it.
 func (s *Stack) proxyArgs(uid, gid int) []string {
 	return []string{
-		"run", "-d", "--rm",
+		"run", "-d",
 		"--name", s.proxyName(),
 		"--network", s.network,
 		"--read-only",
@@ -415,13 +437,24 @@ func (s *Stack) proxyArgs(uid, gid int) []string {
 // waitRunning polls until name is running. Go's listener is up within
 // milliseconds of the process starting, so running is close enough to
 // listening, and a package that dials before then retries like any client.
+// A container that has already exited will never run, so that fails at once
+// with its logs, which say why.
 func (s *Stack) waitRunning(ctx context.Context, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		out, err := s.Docker.run(ctx, "inspect", "-f", "{{.State.Running}}", name)
-		if err == nil && out == "true" {
-			return nil
+		out, err := s.Docker.run(ctx, "inspect", "-f", "{{.State.Status}}", name)
+		if err == nil {
+			switch out {
+			case "running":
+				return nil
+			case "exited", "dead":
+				logs, lerr := s.Docker.logs(ctx, name)
+				if lerr != nil {
+					logs = lerr.Error()
+				}
+				return fmt.Errorf("smoke: %s exited before it was ready: %s", name, logs)
+			}
 		}
 		select {
 		case <-ctx.Done():

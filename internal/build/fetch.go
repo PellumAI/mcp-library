@@ -199,6 +199,12 @@ func checkSHA256(b []byte, want string) error {
 	return nil
 }
 
+// Unpack extracts a package .tar.gz into dir under the same refusals as
+// extract, so smoke runs a package exactly as far as the executor's own
+// unpacker would let it get: a tar that smuggles a symlink escape or a device
+// fails here rather than running.
+func Unpack(b []byte, dir string) error { return extract(b, "package.tar.gz", dir, false) }
+
 // extract unpacks a .tar.gz, .tgz or .zip into dir, refusing any entry
 // pack.Refuse would refuse -- the same function, reused, so a malicious
 // upstream archive cannot smuggle a symlink escape in through the fetch

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pellumai/mcp-library/internal/manifest"
+	"github.com/pellumai/mcp-library/internal/pack"
 	"github.com/pellumai/mcp-library/internal/recipe"
 )
 
@@ -282,5 +283,61 @@ func TestDockerArgs(t *testing.T) {
 	net := DockerArgs(StepSpec{Image: image, Work: "/w", Argv: []string{"npm", "ci"}, Arch: "amd64", Runtime: "node@22", Network: true}, 1, 1)
 	if slices.Contains(net, "none") {
 		t.Fatal("npm ci runs without the network")
+	}
+}
+
+// packageTar gzips a tar of the given headers, each regular file carrying
+// body as its content.
+func packageTar(t *testing.T, hdrs []*tar.Header, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, h := range hdrs {
+		if h.Typeflag == tar.TypeReg {
+			h.Size = int64(len(body))
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := io.WriteString(tw, body); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestUnpack(t *testing.T) {
+	good := packageTar(t, []*tar.Header{
+		{Name: "bin", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "bin/server", Typeflag: tar.TypeReg, Mode: 0o755},
+		{Name: manifest.PackageManifestName, Typeflag: tar.TypeReg, Mode: 0o644},
+		{Name: "bin/alias", Typeflag: tar.TypeSymlink, Linkname: "server"},
+	}, "x")
+	dir := t.TempDir()
+	if err := Unpack(good, dir); err != nil {
+		t.Fatalf("Unpack: %v", err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, "bin", "server"))
+	if err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("bin/server: %v, mode %v", err, fi)
+	}
+	if link, err := os.Readlink(filepath.Join(dir, "bin", "alias")); err != nil || link != "server" {
+		t.Errorf("bin/alias -> %q, %v", link, err)
+	}
+
+	escape := packageTar(t, []*tar.Header{
+		{Name: "evil", Typeflag: tar.TypeSymlink, Linkname: "../../etc/passwd"},
+	}, "")
+	if err := Unpack(escape, t.TempDir()); !errors.Is(err, pack.ErrRefused) {
+		t.Errorf("Unpack of a symlink escape = %v, want pack.ErrRefused", err)
 	}
 }

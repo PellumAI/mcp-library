@@ -93,7 +93,7 @@ func TestContainerArgs_Context7(t *testing.T) {
 	if !slices.Contains(args, "-i") {
 		t.Error("stdio transport needs -i")
 	}
-	for _, f := range []string{"--read-only"} {
+	for _, f := range []string{"--read-only", "--init"} {
 		if !slices.Contains(args, f) {
 			t.Errorf("%s missing", f)
 		}
@@ -129,7 +129,7 @@ func TestContainerArgs_Context7(t *testing.T) {
 
 	env := envMap(args)
 	for k, want := range map[string]string{
-		"PATH":                "/opt/mcpgw/runtimes/node@22/bin:/usr/local/bin:/usr/bin:/bin",
+		"PATH":                "/opt/mcpgw/runtimes/node@22/bin",
 		"HOME":                "/state",
 		"TMPDIR":              "/tmp",
 		"MCPGW_LISTEN_SOCKET": "/run/mcpgw/mcp.sock",
@@ -163,7 +163,7 @@ func TestContainerArgs_ControlEnvNotShadowed(t *testing.T) {
 	spec := context7Spec(t)
 	spec.Env = map[string]string{"PATH": "/evil", "HTTPS_PROXY": "http://evil", "FOO": "bar"}
 	env := envMap(ContainerArgs(spec))
-	if env["PATH"] != "/opt/mcpgw/runtimes/node@22/bin:/usr/local/bin:/usr/bin:/bin" {
+	if env["PATH"] != "/opt/mcpgw/runtimes/node@22/bin" {
 		t.Errorf("PATH shadowed: %q", env["PATH"])
 	}
 	if env["HTTPS_PROXY"] != "http://mcplib-smoke-abc-proxy:3128" {
@@ -203,8 +203,10 @@ func TestContainerArgs_HTTPAndNative(t *testing.T) {
 	if mounts := flagValues(args, "--mount"); !slices.Contains(mounts, "type=bind,src=/work/sock,dst=/run/mcpgw") {
 		t.Errorf("socket dir not bound: %q", mounts)
 	}
-	if got := envMap(args)["PATH"]; got != "/usr/local/bin:/usr/bin:/bin" {
-		t.Errorf("native PATH = %q", got)
+	// A native package gets an empty PATH, as under the executor, where
+	// bwrap binds no system directories for a PATH to name.
+	if got, ok := envMap(args)["PATH"]; !ok || got != "" {
+		t.Errorf("native PATH = %q (present %v), want empty", got, ok)
 	}
 	tail := args[slices.Index(args, spec.Image):]
 	want := []string{spec.Image, "/bin/sh", "-c", `umask 0000 && exec "$@"`, "mcplib-smoke", "/srv/bin/server"}
@@ -287,6 +289,11 @@ func TestProxyArgs(t *testing.T) {
 	if !slices.Contains(args, "-d") || !slices.Contains(args, "--read-only") {
 		t.Errorf("want -d and --read-only: %q", args)
 	}
+	// No --rm: a proxy that dies must leave its container, and so its
+	// logs, for waitRunning to report. Down removes it.
+	if slices.Contains(args, "--rm") {
+		t.Errorf("the proxy must not run with --rm: %q", args)
+	}
 	mounts := flagValues(args, "--mount")
 	for _, want := range []string{
 		"type=bind,src=/host/mcplib,dst=/mcplib,readonly",
@@ -319,7 +326,7 @@ func fakeDocker(t *testing.T, fail string) (Docker, func() []string) {
 		"echo \"$*\" >> " + log + "\n" +
 		"case \"$*\" in\n" +
 		"  *'" + fail + "'*) echo 'boom' >&2; exit 1 ;;\n" +
-		"  inspect*) echo true ;;\n" +
+		"  inspect*) echo running ;;\n" +
 		"esac\n"
 	if fail == "" {
 		body = strings.Replace(body, "  *''*) echo 'boom' >&2; exit 1 ;;\n", "", 1)
@@ -365,10 +372,10 @@ func TestStack_UpDown(t *testing.T) {
 	got := calls()
 	want := []string{
 		"network create --internal " + net,
-		"run -d --rm --name " + net + "-proxy",
+		"run -d --name " + net + "-proxy",
 		"network connect bridge " + net + "-proxy",
-		"inspect -f {{.State.Running}} " + net + "-proxy",
-		"run --rm --name mcplib-smoke-abc-pkg -i --network " + net,
+		"inspect -f {{.State.Status}} " + net + "-proxy",
+		"run --rm --init --name mcplib-smoke-abc-pkg -i --network " + net,
 		"rm -f mcplib-smoke-abc-pkg",
 		"rm -f " + net + "-proxy",
 		"network rm " + net,
@@ -421,6 +428,45 @@ func TestStack_DownRetriesFailedRemoval(t *testing.T) {
 	}
 }
 
+// TestStack_UpFailsFastOnExitedProxy is a proxy that exits at once, say on a
+// bad flag: Up must say so with the proxy's own logs, not wait out its
+// 30-second start budget and report a bare timeout.
+func TestStack_UpFailsFastOnExitedProxy(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "docker")
+	body := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  inspect*) echo exited ;;\n" +
+		"  logs*) echo 'egress-proxy: listen: address in use' >&2 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := &Stack{Docker: Docker{Binary: script}, Image: "img", MCPLib: "/m", LogDir: "/l"}
+	defer func() { _ = st.Down(context.Background()) }()
+	start := time.Now()
+	err := st.Up(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "address in use") {
+		t.Fatalf("Up = %v, want the exited proxy's logs", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("Up took %v; an exited proxy must fail fast", time.Since(start))
+	}
+}
+
+func TestContainerArgs_ParamValues(t *testing.T) {
+	spec := context7Spec(t)
+	spec.Manifest.Params = []manifest.Param{
+		{Name: "url", Env: "URL", Required: true},
+		{Name: "opt", Env: "OPT"},
+	}
+	spec.ParamValues = map[string]string{"url": "https://url.smoke.invalid", "opt": "x"}
+	env := envMap(ContainerArgs(spec))
+	if env["URL"] != "https://url.smoke.invalid" || env["OPT"] != "x" {
+		t.Errorf("ParamValues not applied: %v", env)
+	}
+}
+
 func TestSpecValidate_TinyCPU(t *testing.T) {
 	s := context7Spec(t)
 	s.Manifest.Resources.CPUMax = "1000 1000000"
@@ -447,8 +493,8 @@ func TestStack_StartDrainsStderr(t *testing.T) {
 	script := filepath.Join(dir, "docker")
 	body := "#!/bin/sh\n" +
 		"case \"$*\" in\n" +
-		"  inspect*) echo true ;;\n" +
-		"  'run --rm'*)\n" +
+		"  inspect*) echo running ;;\n" +
+		"  'run --rm --init'*)\n" +
 		"    head -c 262144 /dev/zero | tr '\\0' x >&2\n" +
 		"    echo TAIL-MARKER >&2\n" +
 		"    read -r line\n" +
