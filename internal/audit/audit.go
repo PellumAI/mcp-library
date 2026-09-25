@@ -134,6 +134,12 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		return Report{}, fmt.Errorf("audit: exactly one of --server or --resolve is required")
 	}
 
+	now := in.Now
+	if now == nil {
+		now = time.Now
+	}
+	today := now().UTC().Format(time.DateOnly)
+
 	var (
 		src            recipe.Source
 		serverLicense  string
@@ -151,6 +157,9 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		serverLicense = r.Vetting.License
 		recipeLockfile = r.Build.Lockfile
 		waivers = r.Audit.Waivers
+		if err := checkWaiverDates(r, today); err != nil {
+			return Report{}, err
+		}
 	} else {
 		resolved, err := resolveSource(ctx, in.Resolve, in)
 		if err != nil {
@@ -199,11 +208,7 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		license = sourceLicense(scratch)
 	}
 
-	now := in.Now
-	if now == nil {
-		now = time.Now
-	}
-	blocking, waived := vulnFindings(vulns, waivers, now().UTC().Format(time.DateOnly))
+	blocking, waived := vulnFindings(vulns, waivers, today)
 	if ClassifyLicense(license) == LicenseRefuses {
 		blocking = append(blocking, fmt.Sprintf("server licence %s refuses redistribution", license))
 	}
@@ -244,6 +249,34 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		Blocking: blocking,
 		Waived:   waived,
 	}, nil
+}
+
+// checkWaiverDates refuses a recipe whose waivers the audit must not trust:
+// one recipe.ValidateAudit refuses, so the audit job holds without
+// validate-all; one expiring more than recipe.MaxWaiverDays after today;
+// and a vetting.vetted_on later than today, which would otherwise stretch
+// the vetted_on-relative cap as far as its author liked. today is a UTC
+// YYYY-MM-DD date.
+func checkWaiverDates(r recipe.Recipe, today string) error {
+	if err := recipe.ValidateAudit(r); err != nil {
+		return fmt.Errorf("audit: %w", err)
+	}
+	t, err := time.Parse(time.DateOnly, today)
+	if err != nil {
+		return fmt.Errorf("audit: today %q: %w", today, err)
+	}
+	limit := t.AddDate(0, 0, recipe.MaxWaiverDays).Format(time.DateOnly)
+	for i, w := range r.Audit.Waivers {
+		// ValidateAudit has already parsed every expires as a date, so a
+		// string comparison orders them.
+		if w.Expires > limit {
+			return fmt.Errorf("audit: %s: audit.waivers[%d].expires %s is more than %d days after today %s", r.Name, i, w.Expires, recipe.MaxWaiverDays, today)
+		}
+	}
+	if _, err := time.Parse(time.DateOnly, r.Vetting.VettedOn); err == nil && r.Vetting.VettedOn > today {
+		return fmt.Errorf("audit: %s: vetting.vetted_on %s is later than today %s", r.Name, r.Vetting.VettedOn, today)
+	}
+	return nil
 }
 
 // vulnFindings applies the blocking rules to vulns and then the recipe's

@@ -112,6 +112,9 @@ audit:
 - On the day after `expires` (UTC) the waiver waives nothing: its finding
   blocks again and the waiver adds a blocking line of its own. Re-pin, or
   re-vet and renew the waiver in a reviewed PR.
+- `mcplib audit` itself refuses a recipe whose waivers break these rules, and
+  also one dating `vetted_on` after today or a waiver expiring more than 90
+  days after today, so a future `vetted_on` cannot stretch the cap.
 - A waiver that matches no blocking finding, because the re-pin cleared it or
   the id was mistyped, blocks until it is removed.
 - A refusing licence can never be waived, and `--resolve` takes no waivers.

@@ -185,6 +185,25 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 // would go stale.
 const MaxWaiverDays = 90
 
+// ValidateAudit runs only Validate's audit-waiver rules. `mcplib audit`
+// calls it on the recipe it loads, so a waiver past its cap or without a
+// reason is refused by the audit job itself, not only by validate-all.
+// A recipe with no waivers passes whatever its vetting says.
+func ValidateAudit(r Recipe) error {
+	if len(r.Audit.Waivers) == 0 {
+		return nil
+	}
+	n := r.Name
+	if n == "" {
+		n = "<unnamed>"
+	}
+	vettedOn, err := time.Parse(time.DateOnly, r.Vetting.VettedOn)
+	if err != nil {
+		return fmt.Errorf("recipe: %s: vetting.vetted_on %q must be a YYYY-MM-DD date", n, r.Vetting.VettedOn)
+	}
+	return validateAudit(n, r.Audit, vettedOn)
+}
+
 // validateAudit checks the audit waivers: every field set, expires a date
 // within MaxWaiverDays of vettedOn, and no (id, package) pair twice, since a
 // second copy could only be a stale one with a different expiry.

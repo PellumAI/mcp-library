@@ -220,6 +220,22 @@ func TestValidate_AuditWaivers(t *testing.T) {
 	}
 }
 
+func TestValidateAudit_ChecksOnlyTheWaivers(t *testing.T) {
+	r, _ := good()
+	r.Build.Stage = nil // a Validate refusal ValidateAudit does not look at
+	if err := recipe.ValidateAudit(r); err != nil {
+		t.Fatalf("no waivers refused: %v", err)
+	}
+	r.Audit.Waivers = []recipe.Waiver{{ID: "GHSA-x", Package: "p", Reason: "r", Expires: "2099-01-01"}}
+	if err := recipe.ValidateAudit(r); err == nil || !strings.Contains(err.Error(), "more than 90 days after vetting.vetted_on") {
+		t.Fatalf("err = %v, want the 90-day cap", err)
+	}
+	r.Vetting.VettedOn = "soon"
+	if err := recipe.ValidateAudit(r); err == nil || !strings.Contains(err.Error(), "vetting.vetted_on") {
+		t.Fatalf("err = %v, want vetted_on refused", err)
+	}
+}
+
 func TestParse_DecodesTheAuditBlock(t *testing.T) {
 	r, err := recipe.Parse([]byte(`schema_version: 1
 name: x

@@ -45,27 +45,32 @@ var waiverVulns = map[string]string{
 const highFixedLine = "HIGH-FIXED: HIGH vulnerability in vuln-high-fixed@2.0.0, fixed in 2.0.1"
 const gplLine = "gpl-dep licence GPL-3.0-only refuses redistribution"
 
-// runWithWaivers writes servers/fixture-server with auditYAML as its audit
-// block and runs a --server audit on day today.
+// runWithWaivers writes servers/fixture-server, vetted 2026-09-23, with
+// auditYAML as its audit block and runs a --server audit at now.
 func runWithWaivers(t *testing.T, auditYAML, today string) Report {
 	t.Helper()
-	root := writeWaiverServer(t, auditYAML)
-	server := httptest.NewServer(osvHandler(t, waiverBatch, waiverVulns))
-	defer server.Close()
-	report, err := Run(context.Background(), Input{
-		Root:   root,
-		Server: "fixture-server",
-		Fetch:  waiverFetch(t),
-		OSV:    OSV{BaseURL: server.URL, HTTP: server.Client()},
-		Now:    fixedNow(t, today),
-	})
+	report, err := runServerAudit(t, "2026-09-23", auditYAML, fixedNow(t, today))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	return report
 }
 
-func writeWaiverServer(t *testing.T, auditYAML string) string {
+func runServerAudit(t *testing.T, vettedOn, auditYAML string, now func() time.Time) (Report, error) {
+	t.Helper()
+	root := writeWaiverServer(t, vettedOn, auditYAML)
+	server := httptest.NewServer(osvHandler(t, waiverBatch, waiverVulns))
+	defer server.Close()
+	return Run(context.Background(), Input{
+		Root:   root,
+		Server: "fixture-server",
+		Fetch:  waiverFetch(t),
+		OSV:    OSV{BaseURL: server.URL, HTTP: server.Client()},
+		Now:    now,
+	})
+}
+
+func writeWaiverServer(t *testing.T, vettedOn, auditYAML string) string {
 	t.Helper()
 	root := t.TempDir()
 	recipeYAML := `schema_version: 1
@@ -81,7 +86,7 @@ build:
   steps: [["npm", "ci"]]
   lockfile: package-lock.json
 vetting:
-  vetted_on: "2026-09-23"
+  vetted_on: "` + vettedOn + `"
   license: MIT
 ` + auditYAML
 	writeFixtureFile(t, filepath.Join(root, "servers", "fixture-server"), recipe.FileName, recipeYAML)
@@ -196,7 +201,7 @@ func TestRun_LicenceRefusalIsNotWaivable(t *testing.T) {
 func TestRun_ResolveModeTakesNoWaivers(t *testing.T) {
 	// A committed recipe waiving the finding sits under Root, but --resolve
 	// audits a coordinate, not servers/<name>, and never reads it.
-	root := writeWaiverServer(t, waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2026-10-25"))
+	root := writeWaiverServer(t, "2026-09-23", waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2026-10-25"))
 	server := httptest.NewServer(osvHandler(t, waiverBatch, waiverVulns))
 	defer server.Close()
 	report, err := Run(context.Background(), Input{
@@ -230,5 +235,47 @@ func TestReportSummary_ListsWaivedFindingsWithExpiry(t *testing.T) {
 	}
 	if !strings.Contains(s, "no blocking findings") {
 		t.Errorf("Summary with only waived findings should say nothing blocks:\n%s", s)
+	}
+}
+
+func TestRun_ExpiryIsJudgedByTheUTCDate(t *testing.T) {
+	// 20:00 on 2026-10-25 at UTC-5 is 01:00 on 2026-10-26 in UTC, the day
+	// after the waiver expired.
+	now := func() time.Time { return time.Date(2026, 10, 25, 20, 0, 0, 0, time.FixedZone("UTC-5", -5*3600)) }
+	report, err := runServerAudit(t, "2026-09-23", waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2026-10-25"), now)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertBlocking(t, report.Blocking, []string{
+		highFixedLine,
+		"waiver for HIGH-FIXED/vuln-high-fixed expired 2026-10-25",
+		gplLine,
+	})
+}
+
+// TestRun_RefusesAnInvalidOrGamedWaiver pins that the audit job alone,
+// without validate-all, refuses a waiver recipe.Validate would, and one
+// that games the 90-day cap by dating vetted_on in the future.
+func TestRun_RefusesAnInvalidOrGamedWaiver(t *testing.T) {
+	for _, c := range []struct{ name, vettedOn, audit, want string }{
+		{"past the vetted_on cap", "2026-09-23", waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2099-01-01"),
+			"audit.waivers[0].expires 2099-01-01 is more than 90 days after vetting.vetted_on 2026-09-23"},
+		{"blank reason", "2026-09-23", strings.Replace(waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2026-10-25"),
+			"reason: no upstream release carries the fix yet", `reason: " "`, 1),
+			"audit.waivers[0].reason is required"},
+		{"past today's cap", "2026-12-01", waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2027-02-20"),
+			"audit.waivers[0].expires 2027-02-20 is more than 90 days after today 2026-09-25"},
+		{"vetted in the future", "2026-09-30", waiverYAML("HIGH-FIXED", "vuln-high-fixed", "2026-10-25"),
+			"vetting.vetted_on 2026-09-30 is later than today 2026-09-25"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := runServerAudit(t, c.vettedOn, c.audit, fixedNow(t, "2026-09-25"))
+			if err == nil {
+				t.Fatalf("accepted; want error containing %q", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("error %q does not contain %q", err, c.want)
+			}
+		})
 	}
 }
