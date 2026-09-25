@@ -38,6 +38,31 @@ type Recipe struct {
 	Build         Build    `yaml:"build"`
 	Vetting       Vetting  `yaml:"vetting"`
 	Smoke         Smoke    `yaml:"smoke"`
+	Audit         Audit    `yaml:"audit"`
+}
+
+// Audit holds the reviewed exceptions to `mcplib audit`'s blocking rules.
+// It exists for one situation: an advisory whose fix no upstream release
+// carries yet, so no re-pin can clear it. Each waiver expires, and the audit
+// itself refuses one that has expired or no longer matches anything, so an
+// exception cannot outlive the reason it was granted.
+type Audit struct {
+	Waivers []Waiver `yaml:"waivers"`
+}
+
+// Waiver lets one blocking vulnerability finding through until Expires.
+type Waiver struct {
+	// ID is the OSV advisory id or any of its aliases, such as a GHSA or
+	// CVE id.
+	ID string `yaml:"id" json:"id"`
+	// Package is the dependency name exactly as the audit reports it.
+	Package string `yaml:"package" json:"package"`
+	// Reason names the missing upstream release and where the fix lives,
+	// for the reviewer approving the exception.
+	Reason string `yaml:"reason" json:"reason"`
+	// Expires is a YYYY-MM-DD date, at most 90 days after
+	// vetting.vetted_on. The waiver still applies on that day.
+	Expires string `yaml:"expires" json:"expires"`
 }
 
 // Smoke is the credential escape hatch for servers whose tools require a

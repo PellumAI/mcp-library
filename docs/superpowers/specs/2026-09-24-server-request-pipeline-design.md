@@ -21,6 +21,7 @@ green test deployment.
 | Merge | Only a human with write access merges. One PR per server. Any failed check blocks the merge. |
 | Rejections | Recorded as a row in the VETTING "Evaluated candidates" table through a docs-only PR, and the issue is closed `rejected`. |
 | Split of work | Skills supply judgment and write-ups; deterministic evidence comes from `mcplib audit` and `mcplib smoke`, which CI re-runs, so the merge gate never rests on the agent's word. |
+| Advisory with no fixed release | A reviewed, time-boxed waiver in the recipe's `audit.waivers`, expiring at most 90 days after `vetted_on`; an expired or unused waiver blocks, and a licence refusal is never waivable. |
 
 ## Constraints
 
@@ -101,6 +102,9 @@ non-zero exit on a blocking finding.
 Blocking: an OSV critical, an OSV high with a fixed version available, or a
 licence that refuses redistribution. `audit` has no network access beyond the
 source registries and the OSV API.
+In `--server` mode a recipe `audit.waivers` entry (id or alias, package, reason,
+expiry) moves a matching vulnerability finding from `blocking` to `waived`
+until it expires; see VETTING "Audit waivers".
 
 ### 3. `mcplib smoke <server>`
 

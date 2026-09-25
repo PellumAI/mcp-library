@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pellumai/mcp-library/internal/build"
 	"github.com/pellumai/mcp-library/internal/recipe"
@@ -72,9 +74,21 @@ type Report struct {
 	// Blocking is one line per finding that must stop approval: an OSV
 	// CRITICAL, an OSV HIGH with a fix above the installed version on its
 	// own release branch (Vuln.Fixed lists only those), or a refusing
-	// licence (the server's own, or any dependency's). A non-empty
-	// Blocking is `mcplib audit`'s exit-1 condition.
+	// licence (the server's own, or any dependency's); plus, in --server
+	// mode, one line per recipe waiver that has expired or matches no such
+	// vulnerability. A non-empty Blocking is `mcplib audit`'s exit-1
+	// condition.
 	Blocking []string `json:"blocking"`
+	// Waived lists the vulnerability findings that would block but that a
+	// current recipe waiver lets through, each with the waiver that did.
+	Waived []WaivedFinding `json:"waived"`
+}
+
+// WaivedFinding is a blocking vulnerability finding a recipe waiver moved
+// out of Report.Blocking.
+type WaivedFinding struct {
+	Vuln   Vuln          `json:"vuln"`
+	Waiver recipe.Waiver `json:"waiver"`
 }
 
 // Input is everything Run needs to gather evidence, and nothing it fetches
@@ -106,6 +120,9 @@ type Input struct {
 	// WorkDir is the parent of the scratch fetch tree. Empty means a
 	// directory under os.TempDir.
 	WorkDir string
+	// Now is the clock a waiver's expiry is judged against, by its UTC
+	// date. Nil means time.Now.
+	Now func() time.Time
 }
 
 // Run resolves one server's source, fetches it, reads its lockfile, and
@@ -122,6 +139,7 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		serverLicense  string
 		serverDir      string
 		recipeLockfile string
+		waivers        []recipe.Waiver
 	)
 	if in.Server != "" {
 		serverDir = filepath.Join(in.Root, "servers", in.Server)
@@ -132,6 +150,7 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		src = r.Source
 		serverLicense = r.Vetting.License
 		recipeLockfile = r.Build.Lockfile
+		waivers = r.Audit.Waivers
 	} else {
 		resolved, err := resolveSource(ctx, in.Resolve, in)
 		if err != nil {
@@ -180,17 +199,11 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		license = sourceLicense(scratch)
 	}
 
-	var blocking []string
-	for _, v := range vulns {
-		switch v.Severity {
-		case "CRITICAL":
-			blocking = append(blocking, fmt.Sprintf("%s: CRITICAL vulnerability in %s@%s", v.ID, v.Dep.Name, v.Dep.Version))
-		case "HIGH":
-			if len(v.Fixed) > 0 {
-				blocking = append(blocking, fmt.Sprintf("%s: HIGH vulnerability in %s@%s, fixed in %s", v.ID, v.Dep.Name, v.Dep.Version, strings.Join(v.Fixed, ", ")))
-			}
-		}
+	now := in.Now
+	if now == nil {
+		now = time.Now
 	}
+	blocking, waived := vulnFindings(vulns, waivers, now().UTC().Format(time.DateOnly))
 	if ClassifyLicense(license) == LicenseRefuses {
 		blocking = append(blocking, fmt.Sprintf("server licence %s refuses redistribution", license))
 	}
@@ -229,7 +242,57 @@ func Run(ctx context.Context, in Input) (Report, error) {
 		Scripts:  scripts,
 		Binaries: binaries,
 		Blocking: blocking,
+		Waived:   waived,
 	}, nil
+}
+
+// vulnFindings applies the blocking rules to vulns and then the recipe's
+// waivers to what blocks. A waiver matches a finding when its id is the
+// advisory's id or one of its aliases and its package is the finding's
+// dependency name. It waives only while today, a UTC YYYY-MM-DD date, is
+// no later than its expiry: an expired waiver leaves its findings blocking
+// and blocks itself, and so does a current one matching nothing, so a
+// waiver cannot outlive the finding or the date it was granted for.
+// Licence refusals are never passed through here and so are never waived.
+func vulnFindings(vulns []Vuln, waivers []recipe.Waiver, today string) (blocking []string, waived []WaivedFinding) {
+	used := make([]bool, len(waivers))
+	expired := func(w recipe.Waiver) bool {
+		// An unparseable date is expired rather than open-ended;
+		// recipe.Validate refuses one before it is committed.
+		_, err := time.Parse(time.DateOnly, w.Expires)
+		return err != nil || w.Expires < today
+	}
+	for _, v := range vulns {
+		var line string
+		switch {
+		case v.Severity == "CRITICAL":
+			line = fmt.Sprintf("%s: CRITICAL vulnerability in %s@%s", v.ID, v.Dep.Name, v.Dep.Version)
+		case v.Severity == "HIGH" && len(v.Fixed) > 0:
+			line = fmt.Sprintf("%s: HIGH vulnerability in %s@%s, fixed in %s", v.ID, v.Dep.Name, v.Dep.Version, strings.Join(v.Fixed, ", "))
+		default:
+			continue
+		}
+		i := slices.IndexFunc(waivers, func(w recipe.Waiver) bool {
+			return w.Package == v.Dep.Name && (w.ID == v.ID || slices.Contains(v.Aliases, w.ID))
+		})
+		if i >= 0 {
+			used[i] = true
+			if !expired(waivers[i]) {
+				waived = append(waived, WaivedFinding{Vuln: v, Waiver: waivers[i]})
+				continue
+			}
+		}
+		blocking = append(blocking, line)
+	}
+	for i, w := range waivers {
+		switch {
+		case expired(w):
+			blocking = append(blocking, fmt.Sprintf("waiver for %s/%s expired %s", w.ID, w.Package, w.Expires))
+		case !used[i]:
+			blocking = append(blocking, fmt.Sprintf("waiver for %s/%s matches no blocking finding; remove it", w.ID, w.Package))
+		}
+	}
+	return blocking, waived
 }
 
 // findLockfile locates the lockfile a report's dependency evidence should
@@ -562,6 +625,10 @@ func (r Report) Summary() string {
 	}
 	if len(r.Binaries) > 0 {
 		fmt.Fprintf(&b, "audit: binaries: %s\n", strings.Join(r.Binaries, ", "))
+	}
+	for _, w := range r.Waived {
+		fmt.Fprintf(&b, "audit: WAIVED: %s: %s vulnerability in %s@%s, waived by %s until %s: %s\n",
+			w.Vuln.ID, w.Vuln.Severity, w.Vuln.Dep.Name, w.Vuln.Dep.Version, w.Waiver.ID, w.Waiver.Expires, w.Waiver.Reason)
 	}
 	if len(r.Blocking) == 0 {
 		fmt.Fprintf(&b, "audit: no blocking findings\n")

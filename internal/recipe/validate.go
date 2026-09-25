@@ -161,7 +161,8 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 			return fmt.Errorf("recipe: %s: stage[%d].to %q must be a relative path inside the package", n, i, s.To)
 		}
 	}
-	if _, err := time.Parse(time.DateOnly, r.Vetting.VettedOn); err != nil {
+	vettedOn, err := time.Parse(time.DateOnly, r.Vetting.VettedOn)
+	if err != nil {
 		return fmt.Errorf("recipe: %s: vetting.vetted_on %q must be a YYYY-MM-DD date", n, r.Vetting.VettedOn)
 	}
 	if strings.TrimSpace(r.Vetting.VettedBy) == "" {
@@ -172,6 +173,44 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 	}
 	if err := validateSmoke(n, r.Smoke); err != nil {
 		return err
+	}
+	if err := validateAudit(n, r.Audit, vettedOn); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MaxWaiverDays caps how far past vetting.vetted_on a waiver may expire, so
+// an exception is re-reviewed at least as often as the vetting it rests on
+// would go stale.
+const MaxWaiverDays = 90
+
+// validateAudit checks the audit waivers: every field set, expires a date
+// within MaxWaiverDays of vettedOn, and no (id, package) pair twice, since a
+// second copy could only be a stale one with a different expiry.
+func validateAudit(n string, a Audit, vettedOn time.Time) error {
+	limit := vettedOn.AddDate(0, 0, MaxWaiverDays)
+	seen := map[[2]string]bool{}
+	for i, w := range a.Waivers {
+		for _, f := range []struct{ name, value string }{
+			{"id", w.ID}, {"package", w.Package}, {"reason", w.Reason}, {"expires", w.Expires},
+		} {
+			if strings.TrimSpace(f.value) == "" {
+				return fmt.Errorf("recipe: %s: audit.waivers[%d].%s is required", n, i, f.name)
+			}
+		}
+		expires, err := time.Parse(time.DateOnly, w.Expires)
+		if err != nil {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d].expires %q must be a YYYY-MM-DD date", n, i, w.Expires)
+		}
+		if expires.After(limit) {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d].expires %s is more than %d days after vetting.vetted_on %s", n, i, w.Expires, MaxWaiverDays, vettedOn.Format(time.DateOnly))
+		}
+		key := [2]string{w.ID, w.Package}
+		if seen[key] {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d] duplicates the waiver for %s/%s", n, i, w.ID, w.Package)
+		}
+		seen[key] = true
 	}
 	return nil
 }

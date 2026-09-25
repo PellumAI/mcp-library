@@ -20,7 +20,10 @@ const osvBatchSize = 1000
 
 // Vuln is one vulnerability affecting one locked dependency.
 type Vuln struct {
-	ID       string   `json:"id"`
+	ID string `json:"id"`
+	// Aliases are the advisory's other ids, such as its CVE, as OSV lists
+	// them. An audit waiver may name the advisory by any of them.
+	Aliases  []string `json:"aliases,omitempty"`
 	Severity string   `json:"severity"`
 	Fixed    []string `json:"fixed"`
 	Dep      Dep      `json:"dep"`
@@ -90,6 +93,7 @@ type osvVulnRef struct {
 
 type osvRecord struct {
 	ID               string              `json:"id"`
+	Aliases          []string            `json:"aliases"`
 	Severity         []osvSeverity       `json:"severity"`
 	Affected         []osvAffected       `json:"affected"`
 	DatabaseSpecific osvDatabaseSpecific `json:"database_specific"`
@@ -170,6 +174,7 @@ func (o OSV) Query(ctx context.Context, deps []Dep) ([]Vuln, error) {
 				}
 				vulns = append(vulns, Vuln{
 					ID:       record.ID,
+					Aliases:  record.Aliases,
 					Severity: severityOf(*record),
 					Fixed:    fixedVersions(*record, dep),
 					Dep:      dep,
