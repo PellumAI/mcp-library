@@ -102,9 +102,13 @@ func TestValidate_Refusals(t *testing.T) {
 		{"pip without hashes", func(r *recipe.Recipe, _ *manifest.Doc) {
 			r.Build.Steps = [][]string{{"python3", "-m", "pip", "install", "-r", "requirements.txt"}}
 		}, "build.steps[0] resolves a dependency at build time"},
-		{"go get", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Steps = [][]string{{"go", "mod", "download"}, {"go", "get", "x"}} }, "build.steps[1] resolves a dependency at build time"},
+		{"go get", func(r *recipe.Recipe, _ *manifest.Doc) {
+			r.Build.Steps = [][]string{{"go", "mod", "download"}, {"go", "get", "x"}}
+		}, "build.steps[1] resolves a dependency at build time"},
 		{"curl pipe", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Steps = [][]string{{"curl", "https://x|sh"}} }, "build.steps[0] resolves a dependency at build time"},
-		{"apt-get", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Steps = [][]string{{"apt-get", "install", "-y", "jq"}} }, "build.steps[0] resolves a dependency at build time"},
+		{"apt-get", func(r *recipe.Recipe, _ *manifest.Doc) {
+			r.Build.Steps = [][]string{{"apt-get", "install", "-y", "jq"}}
+		}, "build.steps[0] resolves a dependency at build time"},
 		{"shell string", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Steps = [][]string{{"sh", "-c", "make"}} }, "build.steps[0] resolves a dependency at build time"},
 		{"stage escapes", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Stage[0].To = "../bin/x" }, `stage[0].to "../bin/x" must be a relative path inside the package`},
 		{"stage absolute", func(r *recipe.Recipe, _ *manifest.Doc) { r.Build.Stage[0].To = "/bin/x" }, "must be a relative path inside the package"},
@@ -124,6 +128,130 @@ func TestValidate_Refusals(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestValidate_SmokeBlock covers the recipe's optional smoke escape hatch:
+// initialize-only requires a reason, any other mode is refused, and an
+// absent block (the zero value, as good() leaves it) is full mode and needs
+// no case here because every other test in this file already exercises it.
+func TestValidate_SmokeBlock(t *testing.T) {
+	cases := []struct {
+		name  string
+		smoke recipe.Smoke
+		want  string // "" means the recipe is accepted
+	}{
+		{"initialize-only with a reason", recipe.Smoke{Mode: "initialize-only", Reason: "refuses tools/list without a live credential"}, ""},
+		{"initialize-only without a reason", recipe.Smoke{Mode: "initialize-only"}, "smoke.reason"},
+		{"unknown mode", recipe.Smoke{Mode: "skip"}, `smoke.mode "skip"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, m := good()
+			r.Smoke = c.smoke
+			err := recipe.Validate(r, m, testTarget(t))
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("good smoke block refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted; want error containing %q", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("error %q does not contain %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestValidate_AuditWaivers covers the audit waiver block: every field is
+// required, expires is a date no later than vetted_on + 90 days, and one
+// advisory is waived at most once per package. good() is vetted 2026-09-23,
+// so its cap is 2026-12-22.
+func TestValidate_AuditWaivers(t *testing.T) {
+	ok := func() recipe.Waiver {
+		return recipe.Waiver{
+			ID:      "GHSA-2v4p-qf9q-27wj",
+			Package: "google.golang.org/grpc",
+			Reason:  "no release carries grpc v1.83.2 yet",
+			Expires: "2026-10-25",
+		}
+	}
+	cases := []struct {
+		name    string
+		waivers func() []recipe.Waiver
+		want    string // "" means the recipe is accepted
+	}{
+		{"a good waiver", func() []recipe.Waiver { return []recipe.Waiver{ok()} }, ""},
+		{"expires exactly at the cap", func() []recipe.Waiver { w := ok(); w.Expires = "2026-12-22"; return []recipe.Waiver{w} }, ""},
+		{"same id, another package", func() []recipe.Waiver {
+			w := ok()
+			w.Package = "github.com/apache/thrift"
+			return []recipe.Waiver{ok(), w}
+		}, ""},
+		{"missing id", func() []recipe.Waiver { w := ok(); w.ID = ""; return []recipe.Waiver{w} }, "audit.waivers[0].id is required"},
+		{"missing package", func() []recipe.Waiver { w := ok(); w.Package = " "; return []recipe.Waiver{w} }, "audit.waivers[0].package is required"},
+		{"empty reason", func() []recipe.Waiver { w := ok(); w.Reason = "  "; return []recipe.Waiver{w} }, "audit.waivers[0].reason is required"},
+		{"missing expires", func() []recipe.Waiver { w := ok(); w.Expires = ""; return []recipe.Waiver{w} }, "audit.waivers[0].expires is required"},
+		{"unparseable expires", func() []recipe.Waiver { w := ok(); w.Expires = "25/10/2026"; return []recipe.Waiver{w} }, `audit.waivers[0].expires "25/10/2026" must be a YYYY-MM-DD date`},
+		{"expires past the cap", func() []recipe.Waiver { w := ok(); w.Expires = "2026-12-23"; return []recipe.Waiver{w} }, "audit.waivers[0].expires 2026-12-23 is more than 90 days after vetting.vetted_on 2026-09-23"},
+		{"duplicate pair", func() []recipe.Waiver { return []recipe.Waiver{ok(), ok()} }, "audit.waivers[1] duplicates the waiver for GHSA-2v4p-qf9q-27wj/google.golang.org/grpc"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, m := good()
+			r.Audit.Waivers = c.waivers()
+			err := recipe.Validate(r, m, testTarget(t))
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("good waivers refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("accepted; want error containing %q", c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("error %q does not contain %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateAudit_ChecksOnlyTheWaivers(t *testing.T) {
+	r, _ := good()
+	r.Build.Stage = nil // a Validate refusal ValidateAudit does not look at
+	if err := recipe.ValidateAudit(r); err != nil {
+		t.Fatalf("no waivers refused: %v", err)
+	}
+	r.Audit.Waivers = []recipe.Waiver{{ID: "GHSA-x", Package: "p", Reason: "r", Expires: "2099-01-01"}}
+	if err := recipe.ValidateAudit(r); err == nil || !strings.Contains(err.Error(), "more than 90 days after vetting.vetted_on") {
+		t.Fatalf("err = %v, want the 90-day cap", err)
+	}
+	r.Vetting.VettedOn = "soon"
+	if err := recipe.ValidateAudit(r); err == nil || !strings.Contains(err.Error(), "vetting.vetted_on") {
+		t.Fatalf("err = %v, want vetted_on refused", err)
+	}
+}
+
+func TestParse_DecodesTheAuditBlock(t *testing.T) {
+	r, err := recipe.Parse([]byte(`schema_version: 1
+name: x
+audit:
+  waivers:
+    - id: GHSA-2v4p-qf9q-27wj
+      package: google.golang.org/grpc
+      reason: no release yet
+      expires: "2026-10-25"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := recipe.Waiver{ID: "GHSA-2v4p-qf9q-27wj", Package: "google.golang.org/grpc", Reason: "no release yet", Expires: "2026-10-25"}
+	if len(r.Audit.Waivers) != 1 || r.Audit.Waivers[0] != want {
+		t.Fatalf("Audit.Waivers = %+v, want [%+v]", r.Audit.Waivers, want)
 	}
 }
 

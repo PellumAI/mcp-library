@@ -1,0 +1,32 @@
+{
+  "id": "GHSA-h4x0-1234-abcd",
+  "summary": "Prototype pollution in lodash",
+  "details": "A prototype pollution vulnerability allows an attacker to modify Object.prototype via crafted input to a merge-style function.",
+  "aliases": ["CVE-2024-99999"],
+  "severity": [
+    {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+  ],
+  "affected": [
+    {
+      "package": {
+        "ecosystem": "npm",
+        "name": "lodash"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            { "introduced": "0" },
+            { "fixed": "4.17.19" }
+          ]
+        }
+      ]
+    }
+  ],
+  "database_specific": {
+    "severity": "HIGH"
+  }
+}

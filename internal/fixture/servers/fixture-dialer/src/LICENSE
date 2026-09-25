@@ -1,0 +1,4 @@
+fixture-dialer is part of PellumAI/mcp-library and is licensed under the
+Apache License, Version 2.0, the same terms as the repository's LICENSE.
+It exists only to be packaged as smoke's negative fixture for an
+undeclared egress attempt.

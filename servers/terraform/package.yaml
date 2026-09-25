@@ -33,5 +33,22 @@ vetting:
     optional; without it only the registry tools work. A self-hosted
     Terraform Enterprise needs its host added as an instance egress override,
     because an optional param cannot carry an interpolated egress rule.
+    Smoke's dummy TFE_TOKEN makes the server contact app.terraform.io, whose
+    client setup succeeds despite the bogus token, so it lists 56 tools, 47
+    of them HCP Terraform tools; with that host unreachable it lists only
+    the 9 registry tools, so the committed snapshot needs app.terraform.io
+    reachable through the smoke proxy.
     MPL-2.0 permits redistributing the built binary with its source
     available, which the pinned commit is.
+audit:
+  waivers:
+    - id: GHSA-2v4p-qf9q-27wj
+      package: google.golang.org/grpc
+      reason: >-
+        No terraform-mcp-server release after v1.3.0 carries grpc v1.83.2; upstream main 717c7f41 bumps it and is untagged. Re-pin to the first release that includes it.
+      expires: "2026-10-25"
+    - id: GHSA-vp52-pcj8-j9qc
+      package: google.golang.org/grpc
+      reason: >-
+        No terraform-mcp-server release after v1.3.0 carries grpc v1.83.2; upstream main 717c7f41 bumps it and is untagged. Re-pin to the first release that includes it.
+      expires: "2026-10-25"

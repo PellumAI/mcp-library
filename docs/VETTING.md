@@ -81,6 +81,47 @@ replaces them is narrower and admits far more of the ecosystem.
     do to get there — a stripped timestamp, a rewritten shebang — so the next
     person bumping the version knows what to expect.
 
+## Audit waivers
+
+`mcplib audit --server` blocks on an OSV critical, an OSV high with a fix on
+the installed release branch, and a refusing licence. The fix is to re-pin to
+an upstream release that clears the finding. A waiver is acceptable only when
+no such release exists: the fix is merged upstream but not tagged, or not
+merged at all. It is never a way around a release that exists but is
+inconvenient to take.
+
+A waiver lives in the recipe, next to the vetting it rests on:
+
+```yaml
+audit:
+  waivers:
+    - id: GHSA-2v4p-qf9q-27wj        # the OSV id or any alias, as audit reports it
+      package: google.golang.org/grpc # the dependency name, as audit reports it
+      reason: "No release carries grpc v1.83.2; upstream main 3c90b87e does."
+      expires: "2026-10-25"
+```
+
+- `reason` names the missing release and the upstream commit or PR that
+  carries the fix, so the reviewer can check it and the next person knows what
+  to watch for.
+- `expires` is at most 90 days after `vetting.vetted_on`; `recipe.Validate`
+  refuses anything later, a missing field, and a second waiver for the same
+  advisory and package.
+- A waived finding moves from `blocking` to `waived` in the report and the
+  summary prints it with its expiry date.
+- On the day after `expires` (UTC) the waiver waives nothing: its finding
+  blocks again and the waiver adds a blocking line of its own. Re-pin, or
+  re-vet and renew the waiver in a reviewed PR.
+- Expiry is caught by the daily `audit-schedule` workflow, which audits every
+  server on main and opens or comments on the `audit-expired` issue, and by
+  the next PR that touches the server.
+- `mcplib audit` itself refuses a recipe whose waivers break these rules, and
+  also one dating `vetted_on` after today or a waiver expiring more than 90
+  days after today, so a future `vetted_on` cannot stretch the cap.
+- A waiver that matches no blocking finding, because the re-pin cleared it or
+  the id was mistyped, blocks until it is removed.
+- A refusing licence can never be waived, and `--resolve` takes no waivers.
+
 ## Why every v1 package is amd64 only
 
 The MCPGW gateway and executor images are built `linux/amd64` only today, per

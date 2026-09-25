@@ -161,7 +161,8 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 			return fmt.Errorf("recipe: %s: stage[%d].to %q must be a relative path inside the package", n, i, s.To)
 		}
 	}
-	if _, err := time.Parse(time.DateOnly, r.Vetting.VettedOn); err != nil {
+	vettedOn, err := time.Parse(time.DateOnly, r.Vetting.VettedOn)
+	if err != nil {
 		return fmt.Errorf("recipe: %s: vetting.vetted_on %q must be a YYYY-MM-DD date", n, r.Vetting.VettedOn)
 	}
 	if strings.TrimSpace(r.Vetting.VettedBy) == "" {
@@ -170,7 +171,86 @@ func Validate(r Recipe, m manifest.Doc, t target.Target) error {
 	if len(r.Vetting.Sources) == 0 {
 		return fmt.Errorf("recipe: %s: vetting.sources must cite at least one primary source", n)
 	}
+	if err := validateSmoke(n, r.Smoke); err != nil {
+		return err
+	}
+	if err := validateAudit(n, r.Audit, vettedOn); err != nil {
+		return err
+	}
 	return nil
+}
+
+// MaxWaiverDays caps how far past vetting.vetted_on a waiver may expire, so
+// an exception is re-reviewed at least as often as the vetting it rests on
+// would go stale.
+const MaxWaiverDays = 90
+
+// ValidateAudit runs only Validate's audit-waiver rules. `mcplib audit`
+// calls it on the recipe it loads, so a waiver past its cap or without a
+// reason is refused by the audit job itself, not only by validate-all.
+// A recipe with no waivers passes whatever its vetting says.
+func ValidateAudit(r Recipe) error {
+	if len(r.Audit.Waivers) == 0 {
+		return nil
+	}
+	n := r.Name
+	if n == "" {
+		n = "<unnamed>"
+	}
+	vettedOn, err := time.Parse(time.DateOnly, r.Vetting.VettedOn)
+	if err != nil {
+		return fmt.Errorf("recipe: %s: vetting.vetted_on %q must be a YYYY-MM-DD date", n, r.Vetting.VettedOn)
+	}
+	return validateAudit(n, r.Audit, vettedOn)
+}
+
+// validateAudit checks the audit waivers: every field set, expires a date
+// within MaxWaiverDays of vettedOn, and no (id, package) pair twice, since a
+// second copy could only be a stale one with a different expiry.
+func validateAudit(n string, a Audit, vettedOn time.Time) error {
+	limit := vettedOn.AddDate(0, 0, MaxWaiverDays)
+	seen := map[[2]string]bool{}
+	for i, w := range a.Waivers {
+		for _, f := range []struct{ name, value string }{
+			{"id", w.ID}, {"package", w.Package}, {"reason", w.Reason}, {"expires", w.Expires},
+		} {
+			if strings.TrimSpace(f.value) == "" {
+				return fmt.Errorf("recipe: %s: audit.waivers[%d].%s is required", n, i, f.name)
+			}
+		}
+		expires, err := time.Parse(time.DateOnly, w.Expires)
+		if err != nil {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d].expires %q must be a YYYY-MM-DD date", n, i, w.Expires)
+		}
+		if expires.After(limit) {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d].expires %s is more than %d days after vetting.vetted_on %s", n, i, w.Expires, MaxWaiverDays, vettedOn.Format(time.DateOnly))
+		}
+		key := [2]string{w.ID, w.Package}
+		if seen[key] {
+			return fmt.Errorf("recipe: %s: audit.waivers[%d] duplicates the waiver for %s/%s", n, i, w.ID, w.Package)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// validateSmoke checks the optional credential escape hatch. The zero value
+// is full mode and needs no reason; "initialize-only" needs one, because it
+// is the reviewer's only evidence that skipping the tool-surface snapshot
+// was warranted rather than convenient; anything else is a typo the recipe
+// should not silently treat as full mode.
+func validateSmoke(n string, s Smoke) error {
+	switch s.Mode {
+	case "":
+		return nil
+	case "initialize-only":
+		if strings.TrimSpace(s.Reason) == "" {
+			return fmt.Errorf("recipe: %s: smoke.reason is required when smoke.mode is initialize-only", n)
+		}
+		return nil
+	default:
+		return fmt.Errorf("recipe: %s: smoke.mode %q is not \"\" or \"initialize-only\"", n, s.Mode)
+	}
 }
 
 func validateSource(n string, s Source) error {

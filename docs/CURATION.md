@@ -38,6 +38,13 @@ server change — CI refuses the two together — and it carries this checklist:
 6. Merge the bump, then the rebuilds, so `main` is never in a state where a
    published package is outside its own declared window.
 
+A bump touches every server even though its diff touches none, so
+`scripts/touched-servers.sh` then selects all of them and `packages`,
+`audit` and `smoke` run the whole library against the new target. The same
+holds for any change under `build/`, `internal/build/` or `internal/smoke/`:
+what every package is built or smoked with has moved, and every package is
+re-proved against it.
+
 When the `MCPGW_CONTRACT_TOKEN` secret is set, CI also proves the committed
 contract files are byte-identical to the ones the pinned MCPGW build
 publishes; MCPGW is private, so without it CI checks the recorded digests only.
@@ -80,6 +87,83 @@ should be signed with this library's key at all.
    primary-source URL, and those URLs actually say what the recipe claims.
 
 Only then does the merge happen, and the merge is what signs it.
+
+### Test deployment
+
+`smoke` is the CI job that runs the exact tar `packages` just built — the one
+publishing would sign — inside the locked-down container, and probes it over
+MCP. A pass proves the package starts, negotiates a protocol version inside
+the contract's supported set within `health.initialize_timeout`, lists at
+least one tool with a schema that parses as JSON Schema, dials no host
+outside `manifest.egress`, and exits cleanly on shutdown.
+
+Some servers refuse `tools/list` without a real credential. `package.yaml`
+may then carry `smoke: { mode: initialize-only, reason: "<why>" }`, and
+`smoke` requires only `initialize` and a clean exit. This also skips the
+snapshot, so the PR template asks the reviewer to confirm the stated reason
+is real — it is the one place a reviewer would otherwise see the tool
+surface directly.
+
+**Snapshot drift.** `smoke` writes `servers/<name>/tools.snapshot.json` —
+tool names, descriptions and schemas, sorted — and it is committed. CI fails
+when a fresh smoke run produces a different file than the one in the diff, so
+approving the PR always means approving the exact tool surface the snapshot
+shows, never whatever a stale run happened to record.
+
+**A package that ignores `HTTPS_PROXY`/`HTTP_PROXY` has no route out at
+all** — the container's only reachable peer is the proxy sidecar, so there is
+nothing else for its connections to reach. Its attempts are therefore not
+egress violations the proxy log records; the proxy never sees them. `smoke`
+reports the result as the process failing or timing out, not as a named
+denied host, so a server that dials around the proxy fails smoke but reads
+like a broken server rather than a caught escape.
+
+## Branch protection
+
+The merge gate itself is not something CI can enforce on `main`; a repository
+owner sets it once, by hand, in **Settings → Branches → Branch protection
+rules → `main`** (or with the equivalent `gh api` call below), and it applies
+to everyone, including the owner.
+
+1. **Require status checks to pass before merging**, with branches required
+   to be up to date. Required checks: `check`, `curation`, `packages`
+   (the reproducible-build job), `audit`, `smoke`.
+2. **Require a pull request before merging**, with at least one approval from
+   a CODEOWNER, and dismiss stale approvals on new commits.
+3. **Do not allow bypassing the above settings**, for anyone — including
+   administrators. No one merges around a red check.
+4. **Squash merge only** (Settings → General → Pull Requests): disable merge
+   commits and rebase merging, so `main` carries one commit per server.
+
+The equivalent as `gh api` calls, run once by the owner:
+
+    gh api --method PUT -H "Accept: application/vnd.github+json" \
+      repos/PellumAI/mcp-library/branches/main/protection --input - <<'JSON'
+    {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": ["check", "curation", "packages", "audit", "smoke"]
+      },
+      "enforce_admins": true,
+      "required_pull_request_reviews": {
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true,
+        "required_approving_review_count": 1
+      },
+      "restrictions": null
+    }
+    JSON
+
+    gh api --method PATCH repos/PellumAI/mcp-library \
+      -F allow_squash_merge=true \
+      -F allow_merge_commit=false \
+      -F allow_rebase_merge=false
+
+Because a required check that never reports blocks the merge forever, `audit`
+and `smoke` stay unfiltered by path rather than gated behind a `paths:`
+filter that would skip the workflow — and the check itself — on a PR that
+happens not to touch `servers/`. Such a PR still runs both jobs; they print
+"no servers touched" and succeed.
 
 ## Retiring a version
 

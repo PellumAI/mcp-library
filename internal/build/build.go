@@ -137,11 +137,11 @@ func Run(ctx context.Context, o Options) (Meta, error) {
 	if fetch == nil {
 		fetch = FetchSource
 	}
-	logf("fetch %s", describeSource(r.Source))
+	logf("fetch %s", DescribeSource(r.Source))
 	if err := fetch(ctx, r.Source, src); err != nil {
 		return Meta{}, fmt.Errorf("build: %s: fetch: %w", r.Name, err)
 	}
-	if err := copyTree(filepath.Join(o.ServerDir, recipe.OverlayDir), src, true); err != nil {
+	if err := ApplyOverlay(o.ServerDir, src); err != nil {
 		return Meta{}, fmt.Errorf("build: %s: overlay: %w", r.Name, err)
 	}
 	if err := nonEmpty(src); err != nil {
@@ -218,7 +218,10 @@ func Run(ctx context.Context, o Options) (Meta, error) {
 	return meta, nil
 }
 
-func describeSource(s recipe.Source) string {
+// DescribeSource is a one-line rendering of a pin, for a log or summary
+// line. Exported so audit's report summary uses exactly the same rendering
+// as a build's own log line, rather than a second copy that can drift.
+func DescribeSource(s recipe.Source) string {
 	switch s.Kind {
 	case "git":
 		return s.Repo + "@" + s.Commit
@@ -228,6 +231,15 @@ func describeSource(s recipe.Source) string {
 		return s.URL
 	}
 	return s.Kind
+}
+
+// ApplyOverlay copies serverDir/overlay's tree over dst, overwriting any
+// file it also names; an absent overlay/ is not an error, since it's
+// optional. Exported so audit reads exactly the tree a build would
+// produce, through the one copyTree merge implementation, rather than a
+// second copy that can drift from it.
+func ApplyOverlay(serverDir, dst string) error {
+	return copyTree(filepath.Join(serverDir, recipe.OverlayDir), dst, true)
 }
 
 func nonEmpty(dir string) error {

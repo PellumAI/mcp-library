@@ -37,6 +37,46 @@ type Recipe struct {
 	Source        Source   `yaml:"source"`
 	Build         Build    `yaml:"build"`
 	Vetting       Vetting  `yaml:"vetting"`
+	Smoke         Smoke    `yaml:"smoke"`
+	Audit         Audit    `yaml:"audit"`
+}
+
+// Audit holds the reviewed exceptions to `mcplib audit`'s blocking rules.
+// It exists for one situation: an advisory whose fix no upstream release
+// carries yet, so no re-pin can clear it. Each waiver expires, and the audit
+// itself refuses one that has expired or no longer matches anything, so an
+// exception cannot outlive the reason it was granted.
+type Audit struct {
+	Waivers []Waiver `yaml:"waivers"`
+}
+
+// Waiver lets one blocking vulnerability finding through until Expires.
+type Waiver struct {
+	// ID is the OSV advisory id or any of its aliases, such as a GHSA or
+	// CVE id.
+	ID string `yaml:"id" json:"id"`
+	// Package is the dependency name exactly as the audit reports it.
+	Package string `yaml:"package" json:"package"`
+	// Reason names the missing upstream release and where the fix lives,
+	// for the reviewer approving the exception.
+	Reason string `yaml:"reason" json:"reason"`
+	// Expires is a YYYY-MM-DD date, at most 90 days after
+	// vetting.vetted_on. The waiver still applies on that day.
+	Expires string `yaml:"expires" json:"expires"`
+}
+
+// Smoke is the credential escape hatch for servers whose tools require a
+// live secret to enumerate: mode "initialize-only" tells `mcplib smoke` to
+// require only a clean initialize and shutdown, and to write no
+// tools.snapshot.json, so a package that would otherwise never pass a
+// network-isolated smoke run can still ship. The zero value ("") is full
+// mode: initialize, then tools/list and the other capability-advertised
+// listings. Reason is not decoration; the PR template asks a reviewer to
+// confirm it before a signed package skips the snapshot the reviewer would
+// otherwise use to see the tool surface being signed.
+type Smoke struct {
+	Mode   string `yaml:"mode"`
+	Reason string `yaml:"reason"`
 }
 
 // Source names exactly one upstream, pinned. There is no "latest" kind and
