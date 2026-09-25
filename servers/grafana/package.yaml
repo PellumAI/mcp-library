@@ -34,3 +34,25 @@ vetting:
     is null here and the executor listener is the control. A Grafana on a
     non-default port needs an instance egress override, because the
     interpolated rule carries the host only.
+audit:
+  waivers:
+    - id: GHSA-8wv5-x4w7-5gww
+      package: github.com/apache/thrift
+      reason: >-
+        No mcp-grafana release carries thrift v0.24.0: v1.5.1 and v1.6.0 lock v0.23.0 and upstream main has no fix yet. Renovate PR grafana/mcp-grafana#1214 is pending; re-pin to the first release that carries it.
+      expires: "2026-10-25"
+    - id: GHSA-2v4p-qf9q-27wj
+      package: google.golang.org/grpc
+      reason: >-
+        No mcp-grafana release carries a fixed grpc: v1.5.1 and v1.6.0 pin v1.80.0 and upstream main has no fix yet. Renovate PR grafana/mcp-grafana#1214 is pending; re-pin to the first release that carries it.
+      expires: "2026-10-25"
+    - id: GHSA-hrxh-6v49-42gf
+      package: google.golang.org/grpc
+      reason: >-
+        No mcp-grafana release carries a fixed grpc: v1.5.1 and v1.6.0 pin v1.80.0 and upstream main has no fix yet. Renovate PR grafana/mcp-grafana#1214 is pending; re-pin to the first release that carries it.
+      expires: "2026-10-25"
+    - id: GHSA-vp52-pcj8-j9qc
+      package: google.golang.org/grpc
+      reason: >-
+        No mcp-grafana release carries a fixed grpc: v1.5.1 and v1.6.0 pin v1.80.0 and upstream main has no fix yet. Renovate PR grafana/mcp-grafana#1214 is pending; re-pin to the first release that carries it.
+      expires: "2026-10-25"

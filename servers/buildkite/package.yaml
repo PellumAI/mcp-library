@@ -34,3 +34,10 @@ vetting:
     move to upstream_auth over transport http, or go. Re-checked at v1.22.0:
     main.go still reads BUILDKITE_API_TOKEN. Job logs are cached under HOME,
     which the sandbox points at the per-instance state directory.
+audit:
+  waivers:
+    - id: GHSA-2v4p-qf9q-27wj
+      package: google.golang.org/grpc
+      reason: >-
+        No buildkite-mcp-server release after v1.22.0 carries grpc v1.83.2; upstream main 3c90b87e bumps it and is untagged. Re-pin to the first release that includes it.
+      expires: "2026-10-25"
