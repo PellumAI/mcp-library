@@ -1,0 +1,104 @@
+name: audit-schedule
+
+# ci.yml audits only the servers a pull request touches, so nothing there
+# notices when an audit waiver expires or a new advisory lands against a
+# server nobody is changing. This re-audits every server on main daily and
+# files the result as one tracking issue rather than one per run.
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+# The organisation forbids a write default for GITHUB_TOKEN. The audit reads
+# the tree; the issue step opens or comments on the tracking issue.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: audit-schedule
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: audit every server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build mcplib
+        run: make build
+
+      # mcplib audit reaches only the source registries and the OSV API.
+      - name: Audit every server
+        id: audit
+        run: |
+          set -uo pipefail
+          mkdir -p dist/audit
+          : > dist/audit/failed.txt
+          for recipe in servers/*/package.yaml; do
+            name="$(basename "$(dirname "$recipe")")"
+            if ! ./bin/mcplib audit --server "$name" --json \
+                > "dist/audit/$name.json" 2> "dist/audit/$name.log"; then
+              echo "$name" >> dist/audit/failed.txt
+            fi
+            cat "dist/audit/$name.log"
+          done
+          if [ -s dist/audit/failed.txt ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the tracking issue
+        if: steps.audit.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body=dist/audit/issue.md
+          {
+            echo "The daily audit of main found blocking findings: $RUN_URL"
+            echo
+            while read -r name; do
+              echo "### $name"
+              echo
+              # A report that never got written, a refused recipe or a
+              # network error, leaves its error line in the log instead.
+              if lines="$(jq -r '.blocking[]?' "dist/audit/$name.json" 2>/dev/null)" && [ -n "$lines" ]; then
+                printf '%s\n' "$lines" | sed 's/^/- /'
+              else
+                grep '^mcplib audit:' "dist/audit/$name.log" | sed 's/^/- /' || echo "- audit failed; see the run log"
+              fi
+              echo
+            done < dist/audit/failed.txt
+          } > "$body"
+          gh label create audit-expired --color B60205 \
+            --description "The daily audit of main found blocking findings" 2>/dev/null || true
+          existing="$(gh issue list --label audit-expired --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body"
+          else
+            gh issue create --title "audit: blocking findings on main" --label audit-expired --body-file "$body"
+          fi
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: audit-reports
+          path: dist/audit
+          if-no-files-found: ignore
+
+      - name: Fail on blocking findings
+        if: steps.audit.outputs.failed == 'true'
+        run: |
+          echo "blocking findings in: $(tr '\n' ' ' < dist/audit/failed.txt)"
+          exit 1

@@ -112,6 +112,9 @@ audit:
 - On the day after `expires` (UTC) the waiver waives nothing: its finding
   blocks again and the waiver adds a blocking line of its own. Re-pin, or
   re-vet and renew the waiver in a reviewed PR.
+- Expiry is caught by the daily `audit-schedule` workflow, which audits every
+  server on main and opens or comments on the `audit-expired` issue, and by
+  the next PR that touches the server.
 - `mcplib audit` itself refuses a recipe whose waivers break these rules, and
   also one dating `vetted_on` after today or a waiver expiring more than 90
   days after today, so a future `vetted_on` cannot stretch the cap.
