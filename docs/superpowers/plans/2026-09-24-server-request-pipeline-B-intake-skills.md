@@ -1,7 +1,8 @@
 # Server request pipeline B: intake and skills Implementation Plan
 
 **Spec:** `docs/superpowers/specs/2026-09-24-server-request-pipeline-design.md`, sections Components 1, 4, 5, Flow, Error handling, Testing.
-**Goal:** a requester files through the Pages form or the issue form, and a maintainer runs `/evaluate-server-request <n>` then `/add-server <n>` or `/add-server --reject <n>` to reach one human-merged PR.
+**Revised 2026-09-26:** the request page is dropped per `docs/superpowers/specs/2026-09-26-s3-hosting-design.md` section 4: the repository goes private, so there are no public requests and collaborators file through the issue form.
+**Goal:** a collaborator files through the issue form, and a maintainer runs `/evaluate-server-request <n>` then `/add-server <n>` or `/add-server --reject <n>` to reach one human-merged PR.
 **Constraints:** the spec's `## Constraints` section applies. Additionally:
 - Plan A has merged: `mcplib audit`, `mcplib smoke` and the `smoke:` recipe block exist.
 - The skills follow the superpowers skill format: `SKILL.md` with `name` and `description` frontmatter, under 500 lines, with references split into sibling files.
@@ -14,10 +15,7 @@
 | `.github/ISSUE_TEMPLATE/server-request.yml` | the request issue form |
 | `.github/ISSUE_TEMPLATE/config.yml` | disable blank issues |
 | `scripts/labels.sh` | create the pipeline labels, idempotently |
-| `internal/site/templates/request.html.tmpl` | the request page |
-| `internal/site/templates/layout.html.tmpl` | nav link to the request page |
-| `internal/site/site.go` | render `request.html` |
-| `internal/site/static/request.js` | build the prefilled issue URL |
+| `internal/issueform/issueform_test.go` | guard the issue form's field ids |
 | `.github/PULL_REQUEST_TEMPLATE/server.md` | smoke and evaluation sections |
 | `.claude/skills/evaluate-server-request/SKILL.md` | the evaluation procedure |
 | `.claude/skills/evaluate-server-request/report-template.md` | the `mcplib-eval v1` comment |
@@ -30,9 +28,10 @@
 
 **Files:**
 - Create: `.github/ISSUE_TEMPLATE/server-request.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `scripts/labels.sh`
+- Test: `internal/issueform/issueform_test.go`
 
 **Interfaces:**
-- Produces: the form field ids, which Task 2's URL builder and Task 4's skill read.
+- Produces: the form field ids, which Task 3's skill reads.
 
 ```yaml
 # issue form body ids
@@ -46,37 +45,12 @@ server_name, upstream_url, version, use_case, transport, credential, is_vendor
 - `scripts/labels.sh` runs `gh label create --force` for the eight spec labels, each with a fixed colour and description; a second run changes nothing.
 
 **Tests:**
-- `TestIssueForm_FieldIDs` in `internal/site/site_test.go`: parses the YAML and asserts the seven ids above, so Task 2 cannot drift.
+- `TestIssueForm_FieldIDs` in `internal/issueform/issueform_test.go`: parses `.github/ISSUE_TEMPLATE/server-request.yml` with `gopkg.in/yaml.v3` and asserts the seven ids above, the required flags and the labels. It lives here, not in `internal/site`, because with the request page gone the site has no tie to the form; the skill in Task 3 is the consumer, and a Go test keeps the check inside `make check` with no new tool.
 
 **Gotchas:**
-- GitHub prefills issue-form fields only from query keys equal to the field `id`.
+- `internal/issueform` holds only the test file; it reads the form at `../../.github/ISSUE_TEMPLATE/server-request.yml`.
 
-### Task 2: Request page
-
-**Files:**
-- Create: `internal/site/templates/request.html.tmpl`, `internal/site/static/request.js`
-- Modify: `internal/site/site.go:25-30,112-164`, `internal/site/templates/layout.html.tmpl`
-- Test: `internal/site/site_test.go`
-
-**Interfaces:**
-- Consumes: `render(path, name string, data pageData) error` at `internal/site/site.go:166`, the Task 1 field ids.
-- Produces: `request.html` and `request.js` in the site root; `const IssueRepo = "PellumAI/mcp-library"`.
-
-**Behavior:**
-- The page lists what the library accepts, in three bullets linking `docs/VETTING.md`, then a form with the Task 1 fields.
-- Submit opens `https://github.com/PellumAI/mcp-library/issues/new?template=server-request.yml&title=Server+request%3A+<name>&<id>=<value>…`, with every value `encodeURIComponent`-encoded, in the same tab.
-- An empty required field blocks submit using native `required` validation; the script makes no network call.
-- Every page's nav gains "Request a server".
-
-**Tests:**
-- `TestGenerate_RequestPage`: `request.html` exists, links `request.js` and contains an input for each field id.
-- `TestGenerate_NavLink`: `index.html` and a server page link `request.html` with the right `Root` prefix.
-
-**Gotchas:**
-- The site is embedded through `//go:embed` at `site.go:25-28`; add `static/request.js` to the embed pattern, or `Generate` writes nothing.
-- Keep the page script-light like `index.html.tmpl`'s inline search; no framework.
-
-### Task 3: PR template and CURATION Requests section
+### Task 2: PR template and CURATION Requests section
 
 **Files:**
 - Modify: `.github/PULL_REQUEST_TEMPLATE/server.md`, `docs/CURATION.md`
@@ -88,14 +62,14 @@ server_name, upstream_url, version, use_case, transport, credential, is_vendor
 **Tests:**
 - None; `curation` CI parses nothing here.
 
-### Task 4: Skill `evaluate-server-request`
+### Task 3: Skill `evaluate-server-request`
 
 **Files:**
 - Create: `.claude/skills/evaluate-server-request/SKILL.md`, `report-template.md`, `risk-checklist.md`
 
 **Interfaces:**
 - Consumes: `mcplib audit --resolve <kind>:<coordinate> --json` from Plan A; `gh issue view <n> --json body,labels,author`; `gh issue comment`; `gh issue edit --add-label/--remove-label`.
-- Produces: one issue comment whose first line is `<!-- mcplib-eval v1 -->` and whose Resolution section carries this block, which Task 5 parses:
+- Produces: one issue comment whose first line is `<!-- mcplib-eval v1 -->` and whose Resolution section carries this block, which Task 4 parses:
 
 ```yaml
 name: <server>
@@ -121,19 +95,19 @@ recommendation: APPROVE|APPROVE_WITH_CONDITIONS|REJECT
 **Gotchas:**
 - The superpowers `writing-skills` skill applies; run its pressure test on the injection and never-approve rules.
 
-### Task 5: Skill `add-server`
+### Task 4: Skill `add-server`
 
 **Files:**
 - Create: `.claude/skills/add-server/SKILL.md`, `recipe-guide.md`
 
 **Interfaces:**
-- Consumes: the Task 4 YAML block; `gh api repos/PellumAI/mcp-library/issues/<n>/timeline` and `gh api .../collaborators/<login>/permission`; `mcplib validate`, `build`, `audit`, `smoke --write-snapshot`; `make check`.
+- Consumes: the Task 3 YAML block; `gh api repos/PellumAI/mcp-library/issues/<n>/timeline` and `gh api .../collaborators/<login>/permission`; `mcplib validate`, `build`, `audit`, `smoke --write-snapshot`; `make check`.
 - Produces: branch `server/<name>`, or `vetting/reject-<name>` for `--reject`, and one PR.
 
 **Behavior:**
 - Preconditions per spec Component 5, each refusal naming the failed one; `approved` counts only if the labeller has `write`, `maintain` or `admin`.
 - Pin drift: re-resolving `source` yields a different integrity, commit or sha → stop, and comment asking for re-evaluation.
-- The approve path follows spec Component 5 steps 1–5; the PR body fills the Task 3 template from the report and the smoke JSON.
+- The approve path follows spec Component 5 steps 1–5; the PR body fills the Task 2 template from the report and the smoke JSON.
 - A smoke failure → no PR; the skill comments the smoke JSON on the issue; the label stays `approved`.
 - The reject path adds the VETTING row with verdict `**Exclude, check N.**` and the report's reason, opens the PR, and closes the issue with `rejected` and the report link.
 - The skill works in a git worktree, runs one git command per call, and runs `git diff --cached --stat` before each commit.
@@ -143,4 +117,4 @@ recommendation: APPROVE|APPROVE_WITH_CONDITIONS|REJECT
 
 ## Coverage
 
-Spec sections: Flow, Components 1, 4, 5; Error handling; Testing (request page, skills).
+Spec sections: Flow, Components 1 (issue form and labels), 4, 5; Error handling; Testing (skills).
