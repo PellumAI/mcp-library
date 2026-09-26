@@ -16,7 +16,7 @@ same unauthenticated static paths; only the base URL changes.
 | Who can fetch the index and packages | Anyone. Integrity comes from the library signatures a gateway verifies offline, not from access control |
 | Origin | One private S3 bucket, reachable only through CloudFront with origin access control |
 | Hostname | `library.pellum.ai`, DNS hosted outside AWS: the ACM validation record and the CNAME to CloudFront are added by hand once |
-| Provisioning | Terraform under `infra/`, applied by the owner from a workstation; state in its own S3 backend |
+| Provisioning | The `PellumAI/Infra` repository, stack `library` in the `prod` account, applied by its manual `apply` workflow; see Infra's `docs/superpowers/specs/2026-09-26-infra-repo-design.md` |
 | CI credentials | GitHub Actions OIDC into one narrow publish role; no long-lived AWS keys anywhere |
 | GHCR | Stops being a library store. It keeps only the pinned build image, private, pulled in CI with `GITHUB_TOKEN` |
 | Keyless attestations | Dropped. The gateway never checks Rekor, and every entry permanently publishes the repository and workflow name |
@@ -37,17 +37,19 @@ same unauthenticated static paths; only the base URL changes.
 - Every object is served over HTTPS only, TLS 1.2 minimum.
 - Library signing is unchanged: the same ECDSA library key, `.sig` and
   `.sig.<key id>` files, verified by the gateway against embedded keys.
-- Terraform never holds the library signing key, and CI never holds Terraform
-  admin credentials.
+- The library signing key never leaves this repository's secrets; the Infra
+  repository never holds it.
 
 ## Components
 
-### 1. Infrastructure, `infra/`
+### 1. Infrastructure, provided by `PellumAI/Infra`
 
-- `infra/bootstrap/`: a state bucket with versioning and a lock table, applied
-  once with local state.
-- `infra/library/`: the resources below, with the state backend from
-  bootstrap.
+This repository holds no Terraform. Infra's `stacks/library` provides the
+resources below, and Infra's `stacks/github` writes their coordinates into
+this repository's Actions variables `AWS_PUBLISH_ROLE_ARN`, `LIBRARY_BUCKET`
+and `LIBRARY_DISTRIBUTION_ID`. The requirements this repository places on
+that stack:
+
   - **Bucket** `pellum-mcp-library` (name is a variable): versioning on, all
     public access blocked, default SSE-S3 encryption, object ownership
     enforced. A bucket policy grants `s3:GetObject` to the CloudFront
@@ -70,16 +72,13 @@ same unauthenticated static paths; only the base URL changes.
     | `index.json*`, `releases/*` | 60 s, and invalidated on publish |
     | everything else (HTML, `search.json`, CSS) | 5 min, and invalidated on publish |
 
-  - **Publish role**: a GitHub OIDC provider, created if absent, and a role
-    whose trust policy requires `aud=sts.amazonaws.com` and
+  - **Publish role**: a role whose trust policy requires `aud=sts.amazonaws.com` and
     `sub` matching `repo:PellumAI/mcp-library:ref:refs/heads/main` or the
     release environment. Its policy allows `s3:PutObject`, `s3:GetObject` and
     `s3:ListBucket` on the bucket, and `cloudfront:CreateInvalidation` on the
     distribution.
   - **Outputs**: the distribution domain for the CNAME, the ACM validation
     record, the role ARN, the bucket name and the distribution id.
-- `infra/README.md`: apply order, the two DNS records, and how the role ARN
-  and distribution id reach CI as repository variables.
 
 ### 2. Publish pipeline
 
@@ -147,14 +146,14 @@ same unauthenticated static paths; only the base URL changes.
 
 1. Merge the mcp-library changes with the publish job disabled by a missing
    role variable; the job fails fast and names the variable.
-2. The owner applies `infra/bootstrap`, then `infra/library`, and adds the two
-   DNS records.
-3. The owner sets the repository variables for the role ARN, bucket and
-   distribution id, and runs `migrate-ghcr-to-s3.sh`.
+2. Infra's order of first use steps 1–4: bootstrap, the library stack with the
+   two DNS records, and the github stack, which writes this repository's
+   variables.
+3. The owner runs `migrate-ghcr-to-s3.sh`.
 4. `workflow_dispatch` `publish.yml`, then verify from the new URL.
 5. Merge the PellumStation change, and refresh its snapshot from
    `releases/latest`.
-6. Make the repository private. Unpublish the Pages site, and delete the GHCR
+6. An Infra PR sets `mcp_library_visibility = private` and is applied. Unpublish the Pages site, and delete the GHCR
    `blobs` and `index` packages. The `build` image package stays.
 
 ## Error handling
@@ -171,9 +170,7 @@ same unauthenticated static paths; only the base URL changes.
 
 ## Testing
 
-- `terraform validate` and `terraform plan` in CI on changes to `infra/**`,
-  with no credentials and a mocked provider, or validate-only. Also
-  `tflint`.
+- Infrastructure is tested in `PellumAI/Infra`.
 - `publish-blobs.sh` and `publish-site.sh` are tested against a local S3
   (MinIO in a container) in an integration test:
   - first upload;
@@ -195,8 +192,10 @@ same unauthenticated static paths; only the base URL changes.
 
 ## Delivery plans
 
-- **C**: mcp-library — `infra/`, the S3 publish pipeline, the migration
+- **C**: mcp-library — the S3 publish pipeline, the migration
   script, the site and docs changes, and the removal of Pages, ORAS and
   keyless attestation.
 - **D**: PellumStation — `pinned.json`, the snapshot refresh script, and the
   comment fixes; depends on C's cutover step 4.
+- The AWS and GitHub resources are Infra's Plans A and B, which precede C's
+  cutover.
